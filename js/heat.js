@@ -371,7 +371,13 @@
     if (minN <= T.alarmMinN) { raise(2); reasons.push({ key: 'frost' }); }
     if (drop48 <= T.alarmDrop48) { raise(2); }
     if (gtRise >= T.alarmGtRise) { raise(2); reasons.push({ key: 'gtRise', n: gtRise }); }
-    if (minN <= T.critMinN) { raise(3); }
+    // Mit den Faustregeln liegt critMinN unter alarmMinN, dann steht 'frost' schon da. Mit eigenen Schwellen
+    // (alarmMinN unter critMinN) fehlte sonst jeder Grund für Stufe 3; critMinN ist in den Einstellungen höchstens
+    // 0 °C, der Satz „Die Nacht bringt Frost.“ stimmt also auch dann.
+    if (minN <= T.critMinN) {
+      raise(3);
+      if (!reasons.some((r) => r.key === 'frost')) { reasons.push({ key: 'frost' }); }
+    }
     if (am.hits.length) { raise(am.level); reasons.push({ key: 'alert' }); }
     // Keine Regel hat gegriffen: ruhige Nächte ohne große Sprünge
     if (level === 0) {

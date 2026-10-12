@@ -963,23 +963,51 @@ test('Schwellen-Stepper: genau die acht Felder von heat.DEFAULT_THRESH, Standard
   assert.deepEqual(THRESH_FIELDS, SCHWELLEN);
   assert.deepEqual(Object.keys(THRESH_STEPPERS), SCHWELLEN);
   assert.deepEqual(Object.keys(heat.DEFAULT_THRESH).sort(), SCHWELLEN.slice().sort());
+  // Frost-Schwellen enden bei 0 °C: heat.assess nennt dazu den Grund „frost“, Stufe 3 heißt „Frost / Sturm“
+  const frost = ['alarmMinN', 'critMinN'];
   for (const f of SCHWELLEN) {
     const s = THRESH_STEPPERS[f];
     const d = heat.DEFAULT_THRESH[f];
     assert.ok(s.min < s.max && s.step > 0, f);
-    assert.ok(d > s.min && d < s.max, f + ': der Standardwert ' + d + ' hat Platz nach beiden Seiten');
+    assert.ok(d >= s.min && d <= s.max, f + ': der Standardwert ' + d + ' liegt im Bereich');
+    // Platz nach beiden Seiten, außer alarmMinN: der Standard 0 °C ist zugleich die Frostgrenze, also der obere Rand
+    if (f === 'alarmMinN') {
+      assert.equal(d, s.max, f + ': der Standardwert 0 °C ist der obere Rand');
+    } else {
+      assert.ok(d > s.min && d < s.max, f + ': der Standardwert ' + d + ' hat Platz nach beiden Seiten');
+    }
     assert.equal((d - s.min) % s.step, 0, f + ': der Standardwert liegt auf dem Raster');
     assert.equal(s.label, 'thresh' + f[0].toUpperCase() + f.slice(1), f + ': Beschriftung');
     assert.equal(s.id, s.label, f + ': die IDs im Markup beginnen mit dem Schlüssel');
+    assert.equal(s.name, 'threshName' + f[0].toUpperCase() + f.slice(1), f + ': Hauptwort für die Knöpfe');
     assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.label), f + ': Beschriftung in de');
+    assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.name), f + ': Hauptwort in de');
     assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.unit), f + ': Einheit in de');
+    if (frost.includes(f)) { assert.equal(s.max, 0, f + ': über 0 °C wäre „Die Nacht bringt Frost.“ falsch'); }
   }
+  // Temperaturen in °C, Veränderungen in Grad, Wind in km/h
+  assert.deepEqual(SCHWELLEN.map((f) => THRESH_STEPPERS[f].unit),
+    ['unitCelsius', 'unitDegrees', 'unitCelsius', 'unitDegrees', 'unitDegrees', 'unitCelsius', 'unitKmh', 'unitKmh']);
   // die Beispiele aus M3-DoD 1 (warnMinN 8 und 12) liegen im Bereich
   assert.ok(THRESH_STEPPERS.warnMinN.min <= 8 && THRESH_STEPPERS.warnMinN.max >= 12);
   // Zahl mit Einheit, wie der Stepper sie zeigt; das Minus ist das echte Minuszeichen
   assert.equal(i18n.t('unitCelsius', { n: roundedNum(-4) }), '−4 °C');
   assert.equal(i18n.t('unitKmh', { n: roundedNum(40) }), '40 km/h');
-  assert.equal(i18n.t('unitKd', { n: roundedNum(5) }), '5 Kd');
+  assert.equal(i18n.t('unitDegrees', { n: roundedNum(5) }), '5 Grad');
+  assert.equal(i18n.t('unitDegrees', { n: roundedNum(-4) }), '−4 Grad');
+  // die Knöpfe sagen ganze Wörter, keinen Satzanfang
+  assert.equal(i18n.t('stepUp', { what: i18n.t('threshNameAlarmMinN') }), 'Alarmschwelle für die Nacht erhöhen');
+});
+
+test('applyThreshStep: ein Wert über 0 °C an den Frost-Schwellen (alter Speicher) rastet beim nächsten Schritt bei 0 ein', () => {
+  const D = heat.DEFAULT_THRESH;
+  assert.equal(applyThreshStep({ alarmMinN: 0 }, D, 'alarmMinN', 1), null, 'am Rand: nichts');
+  assert.equal(applyThreshStep(null, D, 'alarmMinN', 1), null, 'der Standard 0 °C ist schon der Rand');
+  assert.deepEqual(applyThreshStep(null, D, 'alarmMinN', -1), { alarmMinN: -1 });
+  assert.deepEqual(applyThreshStep({ alarmMinN: 3 }, D, 'alarmMinN', 1), { alarmMinN: 0 });
+  assert.deepEqual(applyThreshStep({ alarmMinN: 3 }, D, 'alarmMinN', -1), { alarmMinN: 0 });
+  assert.deepEqual(applyThreshStep({ critMinN: 5 }, D, 'critMinN', -1), { critMinN: 0 });
+  assert.equal(applyThreshStep({ critMinN: 0 }, D, 'critMinN', 1), null);
 });
 
 test('applyThreshStep: aus null wird { feld: wert }, nur dieses eine Feld, die Eingabe bleibt unberührt', () => {
