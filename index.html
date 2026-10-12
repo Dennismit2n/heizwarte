@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Heizwarte</title>
 <meta name="description" content="Sagt dir, wann du die Heizung hochstellen musst. Werbefrei, ohne Konto.">
-<meta name="theme-color" content="#111821">
-<meta name="color-scheme" content="dark">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111821">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F3F3F6">
+<meta name="color-scheme" content="dark light">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src https://api.open-meteo.com https://api.brightsky.dev https://photon.komoot.io; object-src 'none'; base-uri 'none'; form-action 'none'; manifest-src 'self'; worker-src 'self'">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="./icon-192.png">
@@ -388,6 +389,15 @@
           <button type="button" id="btnThreshReset" data-i18n="settingsReset"></button>
         </div>
       </details>
+
+      <div class="field" id="settingsTheme">
+        <label for="themeSelect" data-i18n="themeLabel"></label>
+        <select id="themeSelect" autocomplete="off">
+          <option value="system" data-i18n="themeSystem"></option>
+          <option value="light" data-i18n="themeLight"></option>
+          <option value="dark" data-i18n="themeDark"></option>
+        </select>
+      </div>
 
       <button type="button" class="back" id="btnSettingsBack2" data-i18n="btnBack"></button>
     </section>

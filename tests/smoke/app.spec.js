@@ -10,7 +10,7 @@
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
  * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen, Schwellen
- * „Für Fortgeschrittene“), Fall 14 (Stufenzeile als Text) und Fall 17 (mehrere Orte: Nachtrag, Umschalter, Wechsel
+ * „Für Fortgeschrittene“), Fall 13 (Theme System/Hell/Dunkel), Fall 14 (Stufenzeile als Text) und Fall 17 (mehrere Orte: Nachtrag, Umschalter, Wechsel
  * während eines Abrufs, Maximum fünf) stehen schon.
  * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5. Fall 3 läuft
  * zusätzlich mit drei Orten, zwei davon mit 40 Zeichen langen Namen (Umschalter im Kopf, Ortsliste, Rückfrage).
@@ -1175,6 +1175,115 @@ test('Fall 14: die Stufenzeile enthält „Stufe“, die Zahl und das Wort als T
     expect(await zeile.evaluate((e) => e.tagName)).toBe('H2');
     await expect(page.locator('#verdict .lamp')).toHaveAttribute('aria-hidden', 'true');
     expect((await page.locator('#verdict .lamp').textContent()).trim(), 'die Lampen tragen keinen Text').toBe('');
+  }
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 13: Theme System/Hell/Dunkel (BAUPLAN Abschnitt 8, „Theme ab M3“). Playwright meldet ohne Angabe „hell“; jeder
+// Test legt das System deshalb mit page.emulateMedia fest. Gemessen wird am Ergebnis: data-theme, hw:theme (JSON),
+// beide theme-color-Metas und die Variable --bg, die der CSS-Block des gewählten Themes setzt.
+// ---------------------------------------------------------------------------------------------
+
+const TON_DUNKEL = '#111821';
+const TON_HELL = '#F3F3F6';
+const BG_DUNKEL = 'oklch(17% 0.018 252)';
+const BG_HELL = '#F3F3F6';
+
+function themeState(page) {
+  return page.evaluate(() => {
+    const html = document.documentElement;
+    const css = getComputedStyle(html);
+    return {
+      attr: html.getAttribute('data-theme'),
+      stored: localStorage.getItem('hw:theme'),
+      metas: Array.from(document.querySelectorAll('meta[name="theme-color"]')).map((m) => m.getAttribute('content')),
+      bg: css.getPropertyValue('--bg').trim(),
+      scheme: css.colorScheme
+    };
+  });
+}
+
+test('Fall 13: themeSelect schaltet System, Hell und Dunkel; data-theme, hw:theme und beide theme-color-Metas folgen, Reload → bleibt', async ({ page }) => {
+  const net = await mockNet(page);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await startClock(page);
+  await setUpByClicks(page);
+
+  // Start: „System“, und das System ist dunkel
+  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+
+  await openSettings(page);
+  const select = page.locator('#themeSelect');
+  await expect(select).toHaveValue('system');
+  await expect(page.locator('label[for=themeSelect]')).toHaveText(deText('themeLabel'));
+  await expect(select.locator('option')).toHaveText([deText('themeSystem'), deText('themeLight'), deText('themeDark')]);
+  const box = await select.boundingBox();
+  expect(box.height, 'Auswahl mindestens 48 px hoch').toBeGreaterThanOrEqual(48);
+
+  // Hell: sofort, auch gegen das dunkle System; gespeichert als JSON
+  await select.selectOption('light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await themeState(page)).toEqual({ attr: 'light', stored: '"light"', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+
+  // Reload: bleibt, und die Auswahl zeigt es beim nächsten Öffnen
+  await page.reload();
+  await expect(page.locator('#s-main')).toBeVisible();
+  expect(await themeState(page)).toEqual({ attr: 'light', stored: '"light"', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+  await openSettings(page);
+  await expect(select).toHaveValue('light');
+
+  // Dunkel: gilt auch, wenn das System hell ist
+  await page.emulateMedia({ colorScheme: 'light' });
+  await select.selectOption('dark');
+  expect(await themeState(page)).toEqual({ attr: 'dark', stored: '"dark"', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
+  await page.reload();
+  expect(await themeState(page)).toEqual({ attr: 'dark', stored: '"dark"', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
+
+  // System: Attribut und Schlüssel weg, die Metas bekommen ihre Töne zurück, das System (hier hell) entscheidet
+  await openSettings(page);
+  await expect(select).toHaveValue('dark');
+  await select.selectOption('system');
+  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+  await page.reload();
+  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 13: wechselt das System, während „System“ gilt, zeichnet der Hauptbildschirm neu', async ({ page }) => {
+  const net = await mockNet(page);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await startClock(page);
+  await setUpByClicks(page);
+
+  // jedes Rendern schreibt die Temperatur neu: die Beobachtung zählt die Schreibvorgänge
+  await page.evaluate(() => {
+    window.__neuGezeichnet = 0;
+    new MutationObserver((records) => { window.__neuGezeichnet += records.length; })
+      .observe(document.getElementById('nowTemp'), { childList: true, characterData: true, subtree: true });
+  });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect.poll(() => page.evaluate(() => window.__neuGezeichnet)).toBeGreaterThan(0);
+  expect((await themeState(page)).bg, 'das System ist jetzt hell und „System“ folgt ihm').toBe(BG_HELL);
+
+  const gezaehlt = await page.evaluate(() => window.__neuGezeichnet);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect.poll(() => page.evaluate(() => window.__neuGezeichnet)).toBeGreaterThan(gezaehlt);
+  expect((await themeState(page)).bg).toBe(BG_DUNKEL);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 13: ein Wert unter hw:theme, der kein JSON "light" oder "dark" ist, lässt „System“ gelten', async ({ page }) => {
+  const net = await mockNet(page);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  // so schreibt die Startseite ihren Schlüssel (roh), und so sähe ein Unsinnswert aus: beides gilt hier nicht
+  for (const roh of ['light', '"Hell"', '"system"', '{"theme":"light"}']) {
+    await page.addInitScript((wert) => { try { localStorage.setItem('hw:theme', wert); } catch (e) { /* ohne Speicher gibt es nichts zu setzen */ } }, roh);
+    await page.goto('/');
+    expect(await themeState(page), roh).toEqual({ attr: null, stored: roh, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+    await expect(page.locator('#s-welcome')).toBeVisible();
   }
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });
