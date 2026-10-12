@@ -768,8 +768,12 @@ test('Service Worker: Registrierung in init() nur über https oder localhost, Fe
 test('Manifest und Kopf: Manifest-Link, theme-color, Manifest-id /heizwarte/ ab Meilenstein 2', () => {
   const link = all.find((tg) => tg.name === 'link' && tg.attrs.rel === 'manifest');
   assert.equal(link.attrs.href, './manifest.webmanifest');
-  const theme = all.find((tg) => tg.name === 'meta' && tg.attrs.name === 'theme-color');
-  assert.equal(theme.attrs.content, '#111821');
+  // ab M3 zwei Metas mit media (BAUPLAN Abschnitt 8, boot.js): bis M2 war es eine ohne media
+  const themes = all.filter((tg) => tg.name === 'meta' && tg.attrs.name === 'theme-color');
+  assert.deepEqual(themes.map((tg) => [tg.attrs.media, tg.attrs.content]), [
+    ['(prefers-color-scheme: dark)', '#111821'],
+    ['(prefers-color-scheme: light)', '#F3F3F6']
+  ]);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
   assert.equal(manifest.id, '/heizwarte/', 'ab Meilenstein 2 trägt das Manifest id /heizwarte/ (BAUPLAN Abschnitt 9)');
   assert.equal(manifest.theme_color, '#111821');
@@ -784,7 +788,7 @@ test('Einstellungen: Reihenfolge der Blöcke, h3 unter der h2, Zurück oben und 
   const slice = screenSlice('s-settings');
   const folge = ['btnSettingsBack', 'data-i18n="settingsTitle"', 'id="h-set-places"', 'id="settingsPlaceList"', 'id="h-set-heat"',
     'id="rs-radiator"', 'id="stepComfort"', 'id="stepLeadMin"', 'id="stepLeadMax"', 'id="h-set-elev"', 'id="settingsElevInput"', 'id="settingsAdvanced"', 'id="stepThreshWarnMinN"', 'id="stepThreshGustLead"',
-    'id="btnThreshReset"', 'id="btnSettingsBack2"'];
+    'id="btnThreshReset"', 'id="themeSelect"', 'id="btnSettingsBack2"'];
   let letzte = -1;
   for (const f of folge) {
     const pos = slice.indexOf(f);

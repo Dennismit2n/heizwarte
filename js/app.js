@@ -4,8 +4,9 @@
  * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6), der Hauptbildschirm bis zum
  * Heizfahrplan: Kopfzeile, Statuszeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 bis 7) samt
  * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Bis zu
- * fünf Orte: Umschalter im Kopf, Radio je Ort in den Einstellungen, „Ort hinzufügen“ als Nachtrag ab S2. Theme und
- * Sprache, die Schwellen für Fortgeschrittene und die Kurve kommen in den nächsten Schritten dazu.
+ * fünf Orte: Umschalter im Kopf, Radio je Ort in den Einstellungen, „Ort hinzufügen“ als Nachtrag ab S2. Dazu die
+ * Schwellen für Fortgeschrittene und die Theme-Wahl System/Hell/Dunkel (boot.js setzt sie vor dem ersten Paint).
+ * Sprache und die Kurve kommen in den nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
  * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
@@ -53,6 +54,9 @@
   // Weiter als so viele Meter weg zählt die MOSMIX-Station nicht mehr als nah: dann keine zweite Meinung im
   // Fahrplan (und später keine Linie in der Kurve). Annahme 25 km, KT §6.1.
   const MOS_NEAR_M = 25000;
+
+  // Ton der Adressleiste je Theme; derselbe Wert steht in den zwei <meta name="theme-color"> in index.html und in boot.js
+  const THEME_COLOR = { dark: '#111821', light: '#F3F3F6' };
 
   // Schrittzähler je Weg (Tabelle in Abschnitt 6): S1 hat keinen; der Nachtrag aus den Einstellungen zählt wie die Adresse
   const STEP_OF = {
@@ -2209,10 +2213,51 @@
     showSetup({ add: true });
   }
 
+  // Theme (Abschnitt 8): „Darstellung“ mit System, Hell, Dunkel. boot.js hat die Wahl schon vor dem ersten Paint gesetzt;
+  // hier kommt nur das Umschalten dazu. Gespeichert wird als JSON ("light" oder "dark") über persist(), „System“ entfernt
+  // den Schlüssel über forget() (anders als die Startseite, die den Wert roh schreibt).
+
+  // Gespeicherter Wert hw:theme → Auswahl. Nur "light" und "dark" zählen; fehlt der Wert oder ist er kaputt, gilt „System“.
+  function themeOf(stored) {
+    return stored === 'light' || stored === 'dark' ? stored : 'system';
+  }
+
+  // Setzt data-theme (bei „System“ weg) und gibt beiden theme-color-Metas ihren Ton: den gewählten, bei „System“ den
+  // ihres media-Werts (dunkel oder hell), damit die Adressleiste dem System folgt.
+  function applyTheme(choice) {
+    const value = themeOf(choice);
+    const html = document.documentElement;
+    if (value === 'system') { html.removeAttribute('data-theme'); } else { html.setAttribute('data-theme', value); }
+    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+      const own = /light/.test(meta.getAttribute('media') || '') ? 'light' : 'dark';
+      meta.setAttribute('content', THEME_COLOR[value === 'system' ? own : value]);
+    }
+  }
+
+  // Das Theme hat gewechselt (Auswahl in den Einstellungen oder das System): was app.js aus dem Theme ableitet, neu
+  // zeichnen. Ist der Hauptbildschirm nicht zu sehen, zeichnet showMain() beim Zurückkehren ohnehin alles neu.
+  function onSchemeChange() {
+    if (state.screen === 's-main') { render(); }
+  }
+
+  function onTheme() {
+    const value = themeOf($('themeSelect').value);
+    if (value === 'system') { forget('theme'); } else { persist('theme', value); }
+    applyTheme(value);
+    onSchemeChange();
+  }
+
+  // Die Auswahl zeigt, was gerade gilt: das Attribut am <html> (boot.js und onTheme setzen es). Bei einer neueren
+  // Speicherfassung schreibt persist() nichts; die Wahl gilt dann nur bis zum Neuladen und die Auswahl bleibt ehrlich.
+  function renderTheme() {
+    $('themeSelect').value = themeOf(document.documentElement.getAttribute('data-theme'));
+  }
+
   function renderSettings() {
     guard(renderSettingsPlaces);
     guard(renderPlacesError);
     guard(renderSettingsActive);
+    guard(renderTheme);
   }
 
   function onSettingsOpen() {
@@ -2338,6 +2383,7 @@
       on(id + 'Up', 'click', () => onThreshStep(field, 1));
     }
     on('btnThreshReset', 'click', onThreshReset);
+    on('themeSelect', 'change', onTheme);
     on('btnSettingsElev', 'click', () => openSettingsElev($('settingsElevEdit').hidden));
     on('settingsElevInput', 'change', onElevCommit);
     on('settingsElevInput', 'input', clearElevError);
@@ -2371,6 +2417,11 @@
     loadCache();
     bindEvents();
     i18n.onApply(onLanguage);
+    // Folgt die Darstellung dem System, wechselt es von allein zwischen hell und dunkel: dann neu zeichnen (Abschnitt 5 app)
+    if (typeof root.matchMedia === 'function') {
+      const scheme = root.matchMedia('(prefers-color-scheme: light)');
+      if (scheme && typeof scheme.addEventListener === 'function') { scheme.addEventListener('change', onSchemeChange); }
+    }
     $('btnByLocation').hidden = !hasGeolocation();
     updateNotes();
 
@@ -2399,14 +2450,14 @@
   // Nur für Node-Tests (tests/app.test.js): die reinen Funktionen von Ampel, Fahrplan, Statuszeile, Jetzt-Block,
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
-  // afterDelete, cleanLabel) und die Ortsliste
-  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher). Im Browser gibt es kein module, app.js
+  // afterDelete, cleanLabel), die Ortsliste
+  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher) und das Theme (THEME_COLOR, themeOf, applyTheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
+      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
