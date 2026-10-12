@@ -30,7 +30,7 @@ const Heizwarte = require('./_load.js');
 const {
   verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
   STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-  MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
+  MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate
 } = require('../js/app.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
@@ -1241,6 +1241,43 @@ test('showsSwitcher: ein Ort zeigt nur den Namen, ab zwei Orten steht der Umscha
   assert.equal(showsSwitcher(orte(2)), true);
   assert.equal(showsSwitcher(orte(5)), true);
   assert.equal(showsSwitcher(null), false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// alertsGate: wann der Warnblock etwas zeigen darf (BAUPLAN Abschnitt 8, Block 5; M3-DoD 7)
+// ---------------------------------------------------------------------------------------------
+
+test('alertsGate: in Deutschland immer berechtigt, der gescheiterte Abruf meldet nur dort', () => {
+  for (const status of ['ok', 'none', 'outside', 'error', null]) {
+    assert.equal(alertsGate({ cc: 'DE' }, status).eligible, true, 'DE / ' + status);
+    assert.equal(alertsGate({ cc: 'DE' }, status).failed, status === 'error', 'DE / ' + status);
+  }
+});
+
+test('alertsGate: außerhalb Deutschlands kein Block, auch nicht bei einem Fehler oder einem leeren Ergebnis', () => {
+  for (const cc of ['AT', 'CH', 'PT', 'US']) {
+    for (const status of ['outside', 'none', 'error', null]) {
+      const g = alertsGate({ cc }, status);
+      assert.deepEqual(g, { eligible: false, failed: false }, cc + ' / ' + status);
+    }
+  }
+});
+
+test('alertsGate: ein Ort mit unbekanntem Land zeigt den Block nur, wenn Warnungen wirklich ankamen', () => {
+  for (const place of [{ cc: null }, {}, { cc: undefined }]) {
+    assert.deepEqual(alertsGate(place, 'ok'), { eligible: true, failed: false }, JSON.stringify(place));
+    for (const status of ['none', 'outside', 'error']) {
+      assert.deepEqual(alertsGate(place, status), { eligible: false, failed: false }, JSON.stringify(place) + ' / ' + status);
+    }
+  }
+});
+
+test('alertsGate: ohne Ort nichts; ein deutscher Ort mit 404 „not covered“ (outside) zeigt weder Warnung noch Fehler', () => {
+  assert.deepEqual(alertsGate(null, 'ok'), { eligible: false, failed: false });
+  assert.deepEqual(alertsGate(undefined, 'error'), { eligible: false, failed: false });
+  // outside heißt alerts null: berechtigt, aber nichts da und kein Fehler → der Block bleibt weg
+  assert.deepEqual(alertsGate({ cc: 'DE' }, 'outside'), { eligible: true, failed: false });
+  assert.deepEqual(heat.activeAlerts(null, JAN13_MS), []);
 });
 
 // ---------------------------------------------------------------------------------------------

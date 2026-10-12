@@ -1005,6 +1005,147 @@ test('Fall 11: ohne MOSMIX-Stunden im Fenster steht chartMosFar; im hellen Theme
 });
 
 // ---------------------------------------------------------------------------------------------
+// M3-DoD 7: Warnungen des Deutschen Wetterdienstes nur in Deutschland, zweite Meinung (MOSMIX) nur bei naher Station
+// ---------------------------------------------------------------------------------------------
+
+// Photon-Antwort mit genau einem Treffer in Wien (countrycode AT): S3 entfällt, der Ort liegt außerhalb des DWD-Gebiets
+function photonWien() {
+  const json = JSON.parse(fixtureText('photon-haus.json'));
+  const f = json.features[0];
+  Object.assign(f.properties, {
+    street: 'Stephansplatz', housenumber: '1', locality: 'Innere Stadt', district: 'Innere Stadt', city: 'Wien', county: 'Wien',
+    state: 'Wien', country: 'Österreich', postcode: '1010', countrycode: 'AT', extent: [16.3736, 48.2083, 16.3740, 48.2081]
+  });
+  f.geometry.coordinates = [16.3738, 48.2082];
+  json.features = [f];
+  return JSON.stringify(json);
+}
+
+// Bright Sky aus einer Fixture, mit dem einen MOSMIX-Wert mitten im Fenster (14.01., 12:00 Berlin): bs-wien und bs-fern
+// tragen nur eine Stunde vom 11.10.2026, die außerhalb der Wetter-Fixtures vom Januar läge. So hängt es allein an der
+// Entfernung der Station, ob die zweite Meinung erscheint.
+function bsInWindow(name) {
+  const bs = JSON.parse(fixtureText(name));
+  bs.weather[0].timestamp = '2026-01-14T11:00:00+00:00';
+  bs.weather[0].temperature = 2.5;
+  return bs;
+}
+
+test('DoD 7: ein Ort in Wien fragt keine Warnungen ab, zeigt keinen Warnblock, und die nahe Station zeichnet die zweite Meinung', async ({ page }) => {
+  const net = await mockNet(page);
+  net.on.photon = (route) => answer(route, photonWien());
+  net.on.elevation = (route) => answer(route, { elevation: [171.0] });
+  net.on.forecast = (route) => answer(route, fixtureText('om-wien.json'));
+  net.on.weather = (route) => answer(route, bsInWindow('bs-wien.json'));
+  // Falle: käme die Anfrage trotzdem, läge in Wien ein Sturm vor – und der Block stünde da
+  net.on.alerts = (route) => answer(route, fixtureText('alerts-sturm.json'));
+  await logFetches(page);
+  await startClock(page);
+  await setUpByClicks(page);
+
+  const [place] = await storedPlaces(page);
+  expect(place.cc, 'Photon meldet Österreich').toBe('AT');
+  expect(net.count('forecast')).toBeGreaterThanOrEqual(1);
+  const om = new URL(net.log.forecast[0]).searchParams;
+  expect(om.get('models'), 'DACH rechnet mit icon_seamless').toBe('icon_seamless');
+  expect(om.get('latitude')).toBe('48.208');
+  expect(net.count('weather')).toBeGreaterThanOrEqual(1);
+  expect(net.log.weather[0], 'Bright Sky rechnet in der Zone der Antwort').toContain('&tz=Europe/Vienna');
+
+  // keine Warnungs-Anfrage, weder an der Route noch im Seiten-Thread; Status outside, kein Block, kein Fehlertext
+  expect(net.count('alerts'), 'Anfragen an /alerts').toBe(0);
+  expect(await fetchesTo(page, 'api.brightsky.dev/alerts'), 'fetch() an /alerts').toBe(0);
+  const cache = await storedCache(page, place.id);
+  expect(cache.alertsStatus).toBe('outside');
+  expect(cache.alerts).toBeNull();
+  await expect(page.locator('#alerts')).toBeHidden();
+  await expect(page.locator('#alertUnavailable')).toBeHidden();
+  await expect(page.locator('#alertList .alert-item')).toHaveCount(0);
+  await expect(page.locator('[role=alert]:visible')).toHaveCount(0);
+
+  // Station WIEN/CITY in 955 m: nah genug, die gestrichelte Linie und ihre Legendenzeile stehen
+  expect(cache.mosStation).toEqual({ name: 'WIEN/CITY', height: 171, distance: 955 });
+  await page.locator('#more').click();
+  await expect(page.locator('#chart')).toBeVisible();
+  await expect(page.locator('#chartLegend p')).toHaveCount(3);
+  await expect(page.locator('#chartLegend p').nth(1)).toHaveText(deText('chartLegendMos', { station: 'WIEN/CITY', height: 171 }));
+  await expect(page.locator('#chartSvg path.chart-mos')).toHaveCount(1);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('DoD 7: liegt die Station 40 km weit weg, gibt es keine MOSMIX-Linie und chartMosFar steht in der Legende', async ({ page }) => {
+  const net = await mockNet(page);
+  net.on.weather = (route) => answer(route, bsInWindow('bs-fern.json'));
+  await startClock(page);
+  await setUpByClicks(page);
+
+  // der Ort liegt in Deutschland: die Warnungen werden abgefragt (leer), der Block bleibt trotzdem weg
+  const [place] = await storedPlaces(page);
+  expect(place.cc).toBe('DE');
+  expect(net.count('alerts'), 'in Deutschland wird gefragt').toBeGreaterThanOrEqual(1);
+  await expect(page.locator('#alerts')).toBeHidden();
+
+  // der Wert liegt im Fenster, die Station aber 40 km entfernt: ausgeblendet allein wegen der 25-km-Grenze
+  const cache = await storedCache(page, place.id);
+  expect(cache.mos.length, 'ein MOSMIX-Wert im Cache').toBe(1);
+  expect(cache.mosStation.distance).toBe(40000);
+  await page.locator('#more').click();
+  await expect(page.locator('#chart')).toBeVisible();
+  await expect(page.locator('#chartLegend p')).toHaveCount(3);
+  await expect(page.locator('#chartLegend p').nth(1)).toHaveText(deText('chartMosFar'));
+  await expect(page.locator('#chartLegend .legend-swatch')).toHaveCount(2);
+  await expect(page.locator('#chartSvg path.chart-mos')).toHaveCount(0);
+  await expect(page.locator('#chartSvg path.chart-line')).toHaveCount(1);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('DoD 7: meldet der DWD für einen deutschen Ort 404 „not covered“, steht weder ein Warnblock noch ein Fehler da', async ({ page }) => {
+  const net = await mockNet(page);
+  net.on.alerts = (route) => answer(route, fixtureText('alerts-404-outside.json'), 404);
+  await startClock(page);
+  await setUpByClicks(page);
+
+  expect(net.count('alerts')).toBeGreaterThanOrEqual(1);
+  const [place] = await storedPlaces(page);
+  expect(place.cc).toBe('DE');
+  const cache = await storedCache(page, place.id);
+  expect(cache.alertsStatus, '404 „not covered“ heißt outside, nicht error').toBe('outside');
+  expect(cache.alerts).toBeNull();
+  await expect(page.locator('#alerts')).toBeHidden();
+  await expect(page.locator('#alertUnavailable')).toBeHidden();
+  await expect(page.locator('[role=alert]:visible')).toHaveCount(0);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('DoD 7: in Deutschland zeigt der Warnblock die Warnung des DWD mit Überschrift und Quelle; ein Abruffehler heißt alertUnavailable', async ({ page }) => {
+  const net = await mockNet(page);
+  net.on.alerts = (route) => answer(route, fixtureText('alerts-sturm.json'));
+  await startClock(page);
+  await setUpByClicks(page);
+
+  const alert = JSON.parse(fixtureText('alerts-sturm.json')).alerts[0];
+  await expect(page.locator('#alerts')).toBeVisible();
+  await expect(page.locator('#alerts h2')).toHaveText(deText('alertTitle'));
+  await expect(page.locator('#alertList .alert-item')).toHaveCount(1);
+  await expect(page.locator('#alertList .alert-item h3')).toHaveText(alert.headline_de);
+  await expect(page.locator('#alertList .alert-item .alert-text').first()).toHaveText(alert.description_de);
+  await expect(page.locator('#alertSource')).toBeVisible();
+  await expect(page.locator('#alertSource')).toHaveText(deText('alertSource'));
+  await expect(page.locator('#alertUnavailable')).toBeHidden();
+  const [place] = await storedPlaces(page);
+  expect((await storedCache(page, place.id)).alertsStatus).toBe('ok');
+
+  // ein gescheiterter Abruf (500) beim nächsten Start: der Block steht mit dem Hinweis da, ohne Warnungen
+  net.on.alerts = (route) => answer(route, { detail: 'Wartung' }, 500);
+  await page.reload();
+  await expect(page.locator('#alertUnavailable')).toBeVisible();
+  await expect(page.locator('#alertUnavailable')).toHaveText(deText('alertUnavailable'));
+  await expect(page.locator('#alertList .alert-item')).toHaveCount(0);
+  expect((await storedCache(page, place.id)).alertsStatus).toBe('error');
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
 // Fall 12: die Einstellungen (Heizart, Höhe, Stepper, Ortsliste)
 // ---------------------------------------------------------------------------------------------
 
