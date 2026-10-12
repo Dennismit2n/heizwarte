@@ -1,11 +1,14 @@
 /*
  * Heizwarte — Zustand, Einrichtung, Rendern und Abruf. Als einzige Datei darf app.js beim Laden etwas tun.
  *
- * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und ein leeres Hauptbildschirm-Gerüst.
- * Abruf, Wetterblöcke, Einstellungen und Service Worker kommen in den nächsten Schritten dazu.
+ * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und der Hauptbildschirm bis zu den drei
+ * Tagen: Kopfzeile, Jetzt, Ampel, Warnungen, Tage (Abschnitt 8, Blöcke 1 und 3 bis 6) samt Abruf (refresh) mit
+ * Cache je Ort. Statuszeile, Fahrplan, Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
+ * nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
- * (Photon-Beschriftungen), geht ausschließlich per textContent hinein, nie über innerHTML.
+ * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
+ * setSvg(), und dorthin kommt nur, was chart.js aus Zahlen und eigenen Bausteinen baut.
  */
 (function (root) {
   'use strict';
@@ -17,6 +20,20 @@
   const DEFAULT_COMFORT = 20;
   const HEAT_TYPES = ['radiator', 'floorScreed', 'floorDry', 'heatpumpFloor', 'storage'];
   const SCREENS = ['s-welcome', 's-address', 's-hits', 's-confirm', 's-profile', 's-main', 's-settings'];
+
+  // Ohne force ruft refresh() frühestens 60 Sekunden nach dem letzten Abruf noch einmal ab (Flatterschutz, Abschnitt 5 app)
+  const THROTTLE_MS = 60000;
+  // So lange gilt der „current“-Block der Antwort als Jetzt-Wert; danach nimmt die Anzeige die Stunde der Prognose (Entwurf)
+  const FRESH_MS = 90 * 60000;
+
+  // Ampelfarbe je Stufe 0 bis 3 (CSS-Variablen aus style.css)
+  const LEVEL_COLOR = ['var(--ok)', 'var(--warn)', 'var(--alarm)', 'var(--crit)'];
+  // Schlüssel je Stufe 0 bis 3: Name, Handlungssatz ({when} ab Stufe 1), Begründungssatz ({onset}, {lead} ab Stufe 1)
+  const LEVEL_KEYS = ['level0', 'level1', 'level2', 'level3'];
+  const TITLE_KEYS = ['levelTitle0', 'levelTitle1', 'levelTitle2', 'levelTitle3'];
+  const TEXT_KEYS = ['levelText0', 'levelText1', 'levelText2', 'levelText3'];
+  // PlanEntry.charge → Schlüssel (Nachtspeicher)
+  const CHARGE_KEY = { high: 'chargeHigh', up: 'chargeUp', normal: 'chargeNormal', low: 'chargeLow' };
 
   // Schrittzähler je Weg (Tabelle in Abschnitt 6): S1 hat keinen; der Nachtrag aus den Einstellungen zählt wie die Adresse
   const STEP_OF = {
@@ -32,6 +49,8 @@
   let i18n = null;
   let geo = null;
   let heat = null;
+  let weather = null;
+  let chart = null;
 
   const state = {
     places: [],
@@ -42,8 +61,13 @@
     verdict: null,
     source: 'none',
     loading: false,
+    // Zustand der Statuszeile nach der Tabelle in Abschnitt 8 Punkt 2 (die Zeile selbst folgt im nächsten Schritt):
+    // 'loading' | 'live' | 'offline' | 'failed' | 'waiting' | 'rateLimited' | 'noCache'; vor dem ersten Abruf null
+    status: null,
     lastFetchMs: 0,
     waitUntilMs: 0,
+    // Sekunden, die der Wetterdienst um Geduld bat (statusWaiting{s}); nur bei status 'waiting'
+    waitS: 0,
     problems: [],
     // true, wenn hw:v neuer ist als diese Fassung: dann bleibt der Speicher unangetastet (storeNewer)
     newer: false,
@@ -735,6 +759,8 @@
     persist('active', place.id);
     state.activeId = place.id;
     state.place = place;
+    // der neue Ort hat noch keine Daten: die Anzeige darf nicht die des vorigen Orts behalten
+    loadCache();
     s.placeId = place.id;
 
     s.busy = false;
@@ -783,21 +809,486 @@
     const s = state.setup;
     const place = s && placeById(s.placeId);
     if (!place) { return; }
+    // Ein neuer Ort hat noch keine Daten und ruft sofort ab; wer nur die Heizart nachträgt, rechnet mit den
+    // vorhandenen Daten neu (showMain rendert, die Ampel nimmt die Aufheizzeiten der neuen Heizart)
+    const isNew = !s.reentry;
     applyHeatType(place, known ? selectedType() : 'radiator', known);
     persist('places', state.places);
     updateNotes();
-    // Der Abruf (refresh(true)) startet hier, sobald er gebaut ist
     showMain({ focusNow: true });
+    if (isNew) { refresh(true); }
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Hauptbildschirm (Gerüst)
+  // Abruf und Cache (Datenfluss: weather.load → weather.model → heat.assess)
   // ---------------------------------------------------------------------------------------------
 
-  function renderMain() {
+  // Läuft ein Abruf für einen Ort, hängt sich jeder weitere Aufruf für denselben Ort an ihn an (Inflight-Sperre
+  // je Ort-Id). Ein Abruf kann mit dem 429-Wiederholversuch über eine Minute dauern: eine globale Sperre hielte
+  // den Ortswechsel so lange fest, und die Daten des alten Orts erschienen unter dem Namen des neuen.
+  const inflight = new Map();
+
+  function isNum(x) {
+    return typeof x === 'number' && Number.isFinite(x);
+  }
+
+  function isCache(c) {
+    return !!c && typeof c === 'object' && c.v === 2 && isNum(c.fetched) && !!c.om && typeof c.om === 'object';
+  }
+
+  // Ein Block, der wirft, darf die übrigen nicht mitreißen (Abschnitt 5 app, render)
+  function guard(fn) {
+    try {
+      return fn();
+    } catch (e) {
+      console.error(e);
+      return null;
+    }
+  }
+
+  // Modell zum Cache: Ortszeit, Stunden, Tage, Warnungen. Scheitert die Rechnung, bleibt die Anzeige leer statt zu brechen.
+  function modelOf(cache) {
+    return cache ? guard(() => weather.model(cache)) : null;
+  }
+
+  // Liest den Cache des aktiven Orts (hw:cache:<id>) und rechnet das Modell dazu
+  function loadCache() {
+    const raw = state.activeId ? storage.get('cache:' + state.activeId, null) : null;
+    state.cache = isCache(raw) ? raw : null;
+    state.model = modelOf(state.cache);
+    state.verdict = null;
+    state.source = state.cache ? 'cache' : 'none';
+  }
+
+  function onWait(id, ms) {
+    if (id !== state.activeId) { return; }
+    state.status = 'waiting';
+    state.waitS = Math.ceil(ms / 1000);
+    state.waitUntilMs = Date.now() + ms;
+  }
+
+  // Ergebnis eines Abrufs. Der Cache eines Orts wird immer geschrieben, auch wenn inzwischen ein anderer Ort aktiv
+  // ist; gerendert wird nur der aktive Ort. Ein inzwischen gelöschter Ort bekommt keinen Cache zurück.
+  function onFetched(id, result) {
+    const place = placeById(id);
+    if (!place) { return; }
+    persist('cache:' + id, result.cache);
+    updateNotes();
+    const model = modelOf(result.cache);
+    if (!place.tz && model) {
+      place.tz = model.tz;
+      persist('places', state.places);
+    }
+    if (id === state.activeId) {
+      state.cache = result.cache;
+      state.model = model;
+      state.problems = result.problems;
+      state.source = 'live';
+      state.status = 'live';
+      state.lastFetchMs = Date.now();
+      render();
+    } else {
+      // Sicherheitsnetz: den Abruf für den jetzt aktiven Ort hat der Ortswechsel schon gestartet. Läuft er noch,
+      // hängt sich der Aufruf an; ist er fertig, greift die 60-Sekunden-Sperre, es gibt keinen Doppelabruf.
+      refresh(false);
+    }
+  }
+
+  // Fehler eines Abrufs. Der alte Stand bleibt sichtbar; ein Fehler eines nicht mehr aktiven Orts ändert nichts
+  // an der Anzeige. Erwartete Ausfälle (kein Netz, Wetterdienst ausgelastet) kommen als Warnung in die Konsole,
+  // alles andere als Fehler.
+  function onFetchFailed(id, failure) {
+    const code = failure && failure.code;
+    if (weather.OpenMeteoError && failure instanceof weather.OpenMeteoError) {
+      console.warn('Heizwarte: Abruf gescheitert (' + code + ')');
+    } else {
+      console.error(failure);
+    }
+    if (id !== state.activeId) { return; }
+    // auch ein gescheiterter Versuch zählt für den Flatterschutz: sonst riefe jeder Wechsel zurück in die App
+    // einen ausgelasteten Wetterdienst erneut an
+    state.lastFetchMs = Date.now();
+    if (!state.cache) {
+      state.status = 'noCache';
+    } else if (code === 'rate') {
+      state.status = 'rateLimited';
+    } else if (code === 'offline' || code === 'timeout') {
+      state.status = 'offline';
+    } else {
+      state.status = 'failed';
+    }
+    render();
+  }
+
+  async function fetchFor(id) {
+    const place = placeById(id);
+    let result = null;
+    let failure = null;
+    try {
+      result = await weather.load(place, { onWait: (ms) => onWait(id, ms) });
+    } catch (e) {
+      failure = e;
+    }
+    inflight.delete(id);
+    guard(() => {
+      renderReload();
+      if (failure) { onFetchFailed(id, failure); } else { onFetched(id, result); }
+    });
+  }
+
+  // Holt das Wetter für den aktiven Ort. force umgeht den 60-Sekunden-Flatterschutz (Neu laden, Ortswechsel,
+  // neuer Ort, neue Höhe). Gibt das Versprechen des laufenden Abrufs zurück; es wird nie abgelehnt.
+  function refresh(force) {
+    const id = state.activeId;
+    if (!id || !placeById(id)) { return Promise.resolve(); }
+    if (inflight.has(id)) { return inflight.get(id); }
+    if (!force && Date.now() - state.lastFetchMs < THROTTLE_MS) { return Promise.resolve(); }
+    state.status = 'loading';
+    const job = fetchFor(id);
+    inflight.set(id, job);
+    renderReload();
+    return job;
+  }
+
+  function onVisible() {
+    if (document.visibilityState === 'visible' && state.place) { refresh(false); }
+  }
+
+  // Wechsel auf einen anderen Ort: dessen Cache sofort anzeigen (oder nichts), dann neu abrufen
+  function activatePlace(id) {
+    const place = placeById(id);
+    if (!place) { return; }
+    state.activeId = id;
+    state.place = place;
+    persist('active', id);
+    state.status = null;
+    loadCache();
+    render();
+    refresh(true);
+  }
+
+  function onPlaceChange() {
+    const id = $('placeSelect').value;
+    if (id !== state.activeId) { activatePlace(id); }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Hauptbildschirm: Kopfzeile, Jetzt, Ampel, Warnungen, drei Tage (Abschnitt 8)
+  // ---------------------------------------------------------------------------------------------
+
+  // Einzige Stelle mit innerHTML. Der Text kommt aus chart.icon() oder später chart.layout(): nur Zahlen, eigene
+  // Bausteine und var(--…)-Farben, nie Text aus einer API.
+  function setSvg(el, markup) {
+    el.innerHTML = markup;
+  }
+
+  // Zahl mit höchstens einer Nachkommastelle, ohne „,0“: 3 Stunden, 3,5 Stunden
+  function numAuto(x) {
+    const r = Math.round(x * 10) / 10;
+    return i18n.fmt.num(r, Number.isInteger(r) ? 0 : 1);
+  }
+
+  // Zeile mit Text oder, wenn leer, verborgen
+  function setLine(id, text) {
+    const p = $(id);
+    p.textContent = text;
+    p.hidden = !text;
+  }
+
+  // Alles, was von „jetzt“ abhängt, in einem Zug: Ortszeit, Ampel (heat.assess), Index des heutigen Tages.
+  // Wird bei jedem render() neu gerechnet, weil zwischen zwei Abrufen Zeit vergeht und die Heizart sich ändern kann.
+  function buildView() {
+    const m = state.model;
+    if (!m) { return null; }
+    const now = weather.localNow(m.tz, Date.now());
+    const v = heat.assess(m, now, state.place.heat, m.alerts);
+    return { m, now, v, todayIdx: m.days.findIndex((d) => d.key === now.key) };
+  }
+
+  let placeSig = '';
+
+  // Ortszeile: bei einem Ort der Name als Text, ab zwei Orten Beschriftung und natives Auswahlfeld
+  function renderPlaces() {
+    const many = state.places.length > 1;
+    $('placeName').textContent = state.place ? state.place.label : '';
+    $('placeName').hidden = many;
+    $('placePick').hidden = !many;
+    if (!many) { return; }
+    const sel = $('placeSelect');
+    const sig = state.places.map((p) => p.id + '|' + p.label).join('||');
+    if (sig !== placeSig) {
+      placeSig = sig;
+      sel.replaceChildren();
+      for (const p of state.places) {
+        const opt = make('option', '', p.label);
+        opt.value = p.id;
+        sel.appendChild(opt);
+      }
+    }
+    sel.value = state.activeId;
+  }
+
+  // „Neu laden“ trägt während eines Abrufs „Lädt …“ und aria-disabled (nie disabled, der Fokus bleibt)
+  function renderReload() {
+    const btn = $('reload');
+    state.loading = inflight.has(state.activeId);
+    markBusy(btn, state.loading, state.loading ? 'btnReloading' : 'btnReload');
+  }
+
+  function renderHead() {
+    renderPlaces();
+    $('heatHint').hidden = !(state.place && state.place.heat.confirmed === false);
+    renderReload();
+  }
+
+  // Wetter jetzt: frisch (höchstens FRESH_MS alt) der „current“-Block der Antwort, sonst die Prognose-Stunde der
+  // Ortszeit, die zu „jetzt“ passt; fehlt sie, bleibt der „current“-Block. Ohne beides gibt es keine Anzeige.
+  function currentOf(view) {
+    const m = view.m;
+    const hour = m.hours.find((o) => o.dayIdx === view.todayIdx && o.h === view.now.h) || null;
+    const fresh = !!m.current && isNum(m.fetched) && view.now.ms - m.fetched <= FRESH_MS;
+    return (fresh || !hour) ? (m.current || hour) : hour;
+  }
+
+  function renderNow(view) {
+    const cur = view ? currentOf(view) : null;
+    $('nowBody').hidden = !cur;
+    const rootStyle = document.documentElement.style;
+    if (!cur) {
+      rootStyle.removeProperty('--t');
+      return;
+    }
+    const f = i18n.fmt;
+    rootStyle.setProperty('--t', chart.tcol(cur.temp));
+    $('nowTemp').textContent = f.deg(cur.temp, 0);
+    setSvg($('nowIcon'), chart.icon(cur.code, cur.isDay, 34));
+    $('nowCond').textContent = i18n.wmo(cur.code);
+    setLine('nowFeels', isNum(cur.app) ? t('nowFeels', { t: f.deg(cur.app, 0) }) : '');
+    setLine('nowWind', isNum(cur.wind) ? t('nowWind', { kmh: f.num(Math.round(cur.wind), 0) }) : '');
+    setLine('nowHumidity', isNum(cur.rh) ? t('nowHumidity', { p: f.num(Math.round(cur.rh), 0) }) : '');
+    const night = view.v.nights[0];
+    setLine('nowNightMin', night ? t('nowNightMin', { t: f.deg(night.min, 1), time: f.time(night.atMs, view.m.tz) }) : '');
+  }
+
+  // Der Fahrplaneintrag, von dem Handlungssatz und Begründung handeln: der erste, dessen Nacht noch läuft
+  // (Bürg index:395), sonst der erste
+  function planPick(view) {
+    const k = view.v.nights.findIndex((n) => n.toMs > view.now.ms);
+    return view.v.plan[k >= 0 ? k : 0] || null;
+  }
+
+  // Satzteil für levelTitle1–3: „jetzt“, „heute ab 15:00“ oder „Dienstag ab 15:00“
+  function whenPhrase(view, entry) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    if (entry.startMs <= view.now.ms) { return t('planNow'); }
+    const time = f.time(entry.startMs, tz);
+    if (weather.dayKeyOf(entry.startMs, tz) === view.now.key) { return t('planToday', { time }); }
+    return t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time });
+  }
+
+  // Handlungssatz der Stufe. Beim Nachtspeicher gibt es keine Startzeit (startMs null): dort steht die Aufladung.
+  function actionText(view, entry) {
+    const level = view.v.level;
+    if (level === 0 || !entry) { return t(TITLE_KEYS[0]); }
+    if (entry.charge) { return t('chargeTonight', { level: t(CHARGE_KEY[entry.charge]) }); }
+    return t(TITLE_KEYS[level], { when: whenPhrase(view, entry) });
+  }
+
+  // Abkühlung und Aufheizzeit; beim Nachtspeicher entfällt der Satz, weil er keine Aufheizzeit kennt
+  function bodyText(view, entry) {
+    const level = view.v.level;
+    if (level === 0) { return t(TEXT_KEYS[0]); }
+    if (!entry || entry.charge) { return ''; }
+    return t(TEXT_KEYS[level], { onset: i18n.fmt.time(entry.onsetMs, view.m.tz), lead: numAuto(entry.lead) });
+  }
+
+  function reasonText(r) {
+    const f = i18n.fmt;
+    switch (r.key) {
+      case 'nightMin': return t('reasonNightMin', { t: f.deg(r.n, 1) });
+      case 'drop48': return t('reasonDrop48', { k: numAuto(Math.abs(r.n)) });
+      case 'coldWindy': return t('reasonColdWindy');
+      case 'frost': return t('reasonFrost');
+      case 'gtRise': return t('reasonGtRise', { kd: numAuto(r.n) });
+      case 'alert': return t('reasonAlert');
+      case 'calmNights': return t('reasonCalmNights', { t: f.deg(r.n, 0) });
+      case 'noJumps': return t('reasonNoJumps');
+      default: return '';
+    }
+  }
+
+  // Ampel. Die Stufe steht immer als Text (Stufe, Zahl, Wort, Satz), die vier Lampen sind nur Zierde.
+  // Ohne Modell steht levelNoData, bei Daten älter als das Fenster (level null) errTooOld.
+  function renderVerdict(view) {
+    const sec = $('verdict');
+    const v = view ? view.v : null;
+    const shown = !!v && v.level !== null;
+    for (const lamp of sec.querySelectorAll('.lamp i')) {
+      lamp.classList.toggle('on', shown && lamp.classList.contains('l' + v.level));
+    }
+    if (!shown) {
+      sec.style.removeProperty('--lv');
+      for (const id of ['verdictTitle', 'verdictAction', 'verdictText', 'verdictReasons']) { $(id).hidden = true; }
+      setLine('verdictNote', view ? t('errTooOld') : t('levelNoData'));
+      return;
+    }
+    const entry = planPick(view);
+    sec.style.setProperty('--lv', LEVEL_COLOR[v.level]);
+    setLine('verdictTitle', t('levelOf', { n: v.level, name: t(LEVEL_KEYS[v.level]) }));
+    setLine('verdictAction', actionText(view, entry));
+    setLine('verdictText', bodyText(view, entry));
+    const list = $('verdictReasons');
+    list.replaceChildren();
+    for (const r of v.reasons) {
+      const text = reasonText(r);
+      if (text) { list.appendChild(make('li', '', text)); }
+    }
+    list.hidden = !list.firstChild;
+    setLine('verdictNote', '');
+  }
+
+  // DWD-Text in der Sprache der Oberfläche: Deutsch aus den _de-Feldern, alle anderen aus den _en-Feldern
+  // (Wortlaut, nie umformuliert, KT §6.3). Ein Feld zählt nur, wenn es ein nicht-leerer Text ist.
+  function alertText(a, name) {
+    const v = a[name + (i18n.lang === 'de' ? '_de' : '_en')];
+    return typeof v === 'string' && v.trim() !== '' ? v : '';
+  }
+
+  // „von heute 21:00 bis morgen 11:00“; ohne Beginn keine Zeile, ohne Ende kein „bis“ (expires ist oft null)
+  function alertTime(a, view) {
+    const f = i18n.fmt;
+    const from = typeof a.onset === 'string' ? Date.parse(a.onset) : NaN;
+    if (!Number.isFinite(from)) { return ''; }
+    const parts = [t('alertFrom', { when: f.when(from, view.now.ms, view.m.tz, i18n.lang) })];
+    const until = typeof a.expires === 'string' ? Date.parse(a.expires) : NaN;
+    if (Number.isFinite(until)) { parts.push(t('alertUntil', { when: f.when(until, view.now.ms, view.m.tz, i18n.lang) })); }
+    return parts.join(' ');
+  }
+
+  function alertItem(a, view) {
+    const item = make('article', 'alert-item');
+    const head = alertText(a, 'headline') || alertText(a, 'event');
+    if (head) { item.appendChild(make('h3', '', head)); }
+    const when = alertTime(a, view);
+    if (when) { item.appendChild(make('p', 'alert-time', when)); }
+    for (const name of ['description', 'instruction']) {
+      const text = alertText(a, name);
+      if (text) { item.appendChild(make('p', 'alert-text', text)); }
+    }
+    return item;
+  }
+
+  // Warnungen: nur in Deutschland oder wenn die Abfrage Warnungen geliefert hat; es zählen die noch gültigen.
+  // Ohne Warnung und ohne Abruffehler bleibt der Block weg.
+  function renderAlerts(view) {
     const place = state.place;
-    $('placeName').textContent = place ? place.label : '';
-    $('heatHint').hidden = !(place && place.heat.confirmed === false);
+    const status = state.cache ? state.cache.alertsStatus : null;
+    const eligible = !!view && !!place && (place.cc === 'DE' || status === 'ok');
+    const list = eligible ? heat.activeAlerts(view.m.alerts, view.now.ms) : [];
+    const failed = eligible && place.cc === 'DE' && status === 'error';
+    const box = $('alertList');
+    box.replaceChildren();
+    for (const a of list) {
+      const item = alertItem(a, view);
+      if (item.firstChild) { box.appendChild(item); }
+    }
+    const any = !!box.firstChild;
+    $('alerts').hidden = !(any || failed);
+    $('alertLang').hidden = !any || i18n.lang === 'de';
+    $('alertSource').hidden = !any;
+    $('alertUnavailable').hidden = !failed;
+  }
+
+  // Eine Stunde mitten am Tag (12 Uhr, sonst die erste) als Zeitpunkt für Wochentag und Datum der Tageskarte
+  function dayMs(view, day) {
+    let first = null;
+    for (const o of view.m.hours) {
+      if (o.dayIdx !== day.idx) { continue; }
+      if (o.h === 12) { return o.ms; }
+      if (first === null) { first = o.ms; }
+    }
+    return first;
+  }
+
+  // Vergleich mit dem Vortag als Satz, nie als Farbe allein: ab einem Grad Unterschied kälter oder wärmer
+  function compareText(day, ref) {
+    if (!ref || day.partial || ref.partial) { return ''; }
+    const dm = day.mean - ref.mean;
+    if (dm <= -1) { return t('dayColder', { k: numAuto(-dm) }); }
+    if (dm >= 1) { return t('dayWarmer', { k: numAuto(dm) }); }
+    return t('daySame');
+  }
+
+  function dayCard(view, day, i, ref) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    const lang = i18n.lang;
+    const ms = dayMs(view, day);
+    const card = make('article', 'day');
+    const name = i === 0 ? t('dayToday') : (i === 1 ? t('dayTomorrow') : f.wday(ms, tz, lang, true));
+    card.appendChild(make('h3', '', name));
+    card.appendChild(make('p', 'day-date', i < 2 ? f.wday(ms, tz, lang, true) + ' ' + f.date(ms, tz, lang) : f.date(ms, tz, lang)));
+    if (isNum(day.code)) {
+      const cond = make('p', 'day-cond');
+      const ic = make('span', 'icon');
+      setSvg(ic, chart.icon(day.code, true, 32));
+      cond.appendChild(ic);
+      cond.appendChild(make('span', '', i18n.wmo(day.code)));
+      card.appendChild(cond);
+    }
+    // Die Zahlen der Spanne tragen die Temperaturfarbe; der Satz daneben sagt dasselbe in Worten
+    if (isNum(day.min)) {
+      const p = make('p', 'day-range', t('dayMin', { t: f.deg(day.min, 0) }));
+      p.style.color = chart.tcol(day.min);
+      card.appendChild(p);
+    }
+    if (isNum(day.max)) {
+      const p = make('p', 'day-range', t('dayMax', { t: f.deg(day.max, 0) }));
+      p.style.color = chart.tcol(day.max);
+      card.appendChild(p);
+    }
+    if (isNum(day.rain) && day.rain >= 0.2) { card.appendChild(make('p', '', t('dayRain', { mm: f.num(day.rain, 1) }))); }
+    if (isNum(day.sun)) { card.appendChild(make('p', '', t('daySun', { h: f.num(day.sun, 1) }))); }
+    const cmp = compareText(day, ref);
+    if (cmp) { card.appendChild(make('p', 'day-note', cmp)); }
+    return card;
+  }
+
+  // Heute und die zwei folgenden Tage. Die Tage kommen aus dem Modell, nicht aus der Ampel: Sie bleiben auch dann,
+  // wenn die Ampel wegen fehlender Nächte „zu alt“ sagt. Liegt heute gar nicht im Modell, entfällt der Block.
+  function renderDays(view) {
+    const list = $('dayList');
+    list.replaceChildren();
+    const days = view && view.todayIdx >= 0 ? view.m.days.slice(view.todayIdx, view.todayIdx + 3) : [];
+    $('days').hidden = !days.length;
+    days.forEach((day, i) => {
+      const ref = i === 0 ? view.m.days[view.todayIdx - 1] : days[i - 1];
+      list.appendChild(dayCard(view, day, i, ref));
+    });
+  }
+
+  // Zeichnet den Hauptbildschirm neu, Block für Block; scheitert einer, laufen die übrigen weiter
+  function render() {
+    if (!state.place) { return; }
+    guard(renderHead);
+    const view = guard(buildView);
+    state.verdict = view ? view.v : null;
+    guard(() => renderNow(view));
+    guard(() => renderVerdict(view));
+    guard(() => renderAlerts(view));
+    guard(() => renderDays(view));
+  }
+
+  function onSettingsOpen() {
+    state.setup = null;
+    showScreen('s-settings');
+  }
+
+  // „Zurück“ aus den Einstellungen: der Fokus kehrt auf den Knopf zurück, der sie geöffnet hat
+  function onSettingsBack() {
+    showMain();
+    $('settingsBtn').focus();
   }
 
   // opts.focusNow: Fokus auf section#now h2, nur nach der Einrichtung, nie beim normalen App-Start
@@ -810,7 +1301,7 @@
       return;
     }
     state.activeId = state.place.id;
-    renderMain();
+    render();
     showScreen('s-main', { focus: !!o.focusNow });
   }
 
@@ -834,7 +1325,7 @@
     renderStep();
     if (state.screen === 's-hits') { renderHits(); }
     if (state.screen === 's-confirm') { renderConfirm(); }
-    if (state.screen === 's-main') { renderMain(); }
+    if (state.screen === 's-main') { render(); }
   }
 
   function on(id, type, fn) {
@@ -883,6 +1374,12 @@
     on('btnDone', 'click', () => finishProfile(true));
     on('btnDontKnow', 'click', () => finishProfile(false));
     on('btnHeatChange', 'click', onHeatChange);
+
+    // „Neu laden“ ruft immer ab und hängt sich an einen laufenden Abruf an (refresh(true))
+    on('reload', 'click', () => { refresh(true); });
+    on('settingsBtn', 'click', onSettingsOpen);
+    on('btnSettingsBack', 'click', onSettingsBack);
+    on('placeSelect', 'change', onPlaceChange);
   }
 
   function init() {
@@ -891,8 +1388,10 @@
     i18n = H.i18n;
     geo = H.geo;
     heat = H.heat;
-    if (!storage || !i18n || !geo || !heat) {
-      console.error('Heizwarte: ein Modul fehlt (storage, i18n, geo oder heat)');
+    weather = H.weather;
+    chart = H.chart;
+    if (!storage || !i18n || !geo || !heat || !weather || !chart) {
+      console.error('Heizwarte: ein Modul fehlt (storage, i18n, geo, weather, heat oder chart)');
       return;
     }
 
@@ -900,19 +1399,23 @@
     i18n.apply(i18n.detect());
     state.newer = storage.get('v', 2) > 2;
     loadPlaces();
+    loadCache();
     bindEvents();
     i18n.onApply(onLanguage);
     $('btnByLocation').hidden = !hasGeolocation();
     updateNotes();
 
     // Ohne Ort beginnt die Einrichtung bei S1, sonst der Hauptbildschirm. Der Fokus bleibt, wo er ist:
-    // Er springt beim Start nicht von selbst auf eine Überschrift.
+    // Er springt beim Start nicht von selbst auf eine Überschrift. showMain zeigt zuerst den Cache,
+    // refresh() holt danach frische Daten (mit dem Flatterschutz kein Doppelabruf).
     if (state.places.length === 0) {
       showSetup({ focus: false });
     } else {
       showMain();
+      refresh(false);
     }
-    // Es folgen: aus dem Cache rendern, refresh(), visibilitychange, Service Worker (spätere Schritte)
+    document.addEventListener('visibilitychange', onVisible);
+    // Es folgen: Statuszeile, Einstellungen, Größenänderung der Kurve, Service Worker (spätere Schritte)
   }
 
   if (typeof document !== 'undefined') {

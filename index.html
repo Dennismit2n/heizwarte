@@ -162,18 +162,64 @@
     </section>
 
     <section class="screen" id="s-main" hidden>
-      <p class="place-name" id="placeName"></p>
+      <div class="place-row">
+        <p class="place-name" id="placeName"></p>
+        <div class="place-pick" id="placePick" hidden>
+          <label for="placeSelect" data-i18n="placeLabel"></label>
+          <select id="placeSelect"></select>
+        </div>
+        <div class="head-actions">
+          <button type="button" id="reload" data-i18n="btnReload"></button>
+          <button type="button" id="settingsBtn" data-i18n="btnSettings"></button>
+        </div>
+      </div>
       <div class="notice" id="heatHint" hidden>
         <p data-i18n="setupHeatDefaultHint"></p>
         <button type="button" id="btnHeatChange" data-i18n="btnChange"></button>
       </div>
       <p id="status" aria-live="polite"></p>
-      <section id="now">
+
+      <section class="now" id="now">
         <h2 tabindex="-1" data-i18n="nowTitle"></h2>
+        <div class="now-body" id="nowBody" hidden>
+          <p class="now-temp" id="nowTemp"></p>
+          <div class="now-meta">
+            <p class="now-cond"><span class="icon" id="nowIcon"></span><span id="nowCond"></span></p>
+            <p id="nowFeels"></p>
+            <p id="nowWind"></p>
+            <p id="nowHumidity"></p>
+            <p id="nowNightMin"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="verdict" id="verdict">
+        <div class="lamp" aria-hidden="true"><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l0"></i></div>
+        <div class="verdict-body">
+          <h2 id="verdictTitle" hidden></h2>
+          <p class="verdict-action" id="verdictAction" hidden></p>
+          <p id="verdictText" hidden></p>
+          <ul class="reasons" id="verdictReasons" hidden></ul>
+          <p id="verdictNote" hidden></p>
+        </div>
+      </section>
+
+      <div class="alerts" id="alerts" hidden>
+        <h2 data-i18n="alertTitle"></h2>
+        <p class="hint" id="alertLang" data-i18n="alertLangHint" hidden></p>
+        <div class="alert-list" id="alertList"></div>
+        <p class="hint" id="alertSource" data-i18n="alertSource" hidden></p>
+        <p id="alertUnavailable" data-i18n="alertUnavailable" hidden></p>
+      </div>
+
+      <section class="days-box" id="days" hidden>
+        <h2 data-i18n="daysTitle"></h2>
+        <div class="days" id="dayList"></div>
       </section>
     </section>
 
     <section class="screen" id="s-settings" hidden>
+      <button type="button" class="back" id="btnSettingsBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="settingsTitle"></h2>
     </section>
   </main>

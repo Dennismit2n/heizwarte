@@ -23,7 +23,7 @@
   --accent: oklch(74% 0.1 235);
   --on-accent: oklch(16% 0.02 252);
 
-  /* aktuelle Temperaturfarbe, wird später per style.setProperty gesetzt */
+  /* aktuelle Temperaturfarbe, app.js setzt sie per style.setProperty (CSSOM, mit der CSP vereinbar) */
   --t: oklch(85% 0.05 210);
 
   /* Ampel */
@@ -31,6 +31,16 @@
   --warn: oklch(85% 0.16 92);
   --alarm: oklch(73% 0.17 55);
   --crit: oklch(66% 0.21 25);
+
+  /* Wettersymbole (Bürg index:250–260, als Variablen, damit das Hell-Theme in Meilenstein 3 sie überschreiben kann) */
+  --ic-sun: oklch(86% 0.15 85);
+  --ic-moon: oklch(85% 0.05 250);
+  --ic-cloud: oklch(78% 0.02 250);
+  --ic-cloud-dark: oklch(66% 0.02 250);
+  --ic-fog: oklch(72% 0.02 250);
+  --ic-rain: oklch(72% 0.11 240);
+  --ic-snow: oklch(92% 0.03 230);
+  --ic-bolt: oklch(86% 0.16 92);
 
   /* Schriften: Atkinson Hyperlegible kommt selbst gehostet in einem späteren Schritt, bis dahin greift der Rückfall */
   --display: "Avenir Next", "Segoe UI", system-ui, sans-serif;
@@ -423,11 +433,42 @@ input[aria-invalid="true"] {
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Hauptbildschirm (Gerüst)
+   Hauptbildschirm: Kopfzeile, Jetzt, Ampel, Warnungen, drei Tage
    --------------------------------------------------------------------------------------------- */
+
+/* Ortszeile und die zwei Textknöpfe; bricht auf schmalen Handys um, nie ein Zahnrad allein */
+.place-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
 
 .place-name {
   font-weight: 700;
+}
+
+.place-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 2px solid var(--edge);
+  border-radius: 0.625rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .notice {
@@ -439,4 +480,203 @@ input[aria-invalid="true"] {
   background: var(--surface);
   border: 2px solid var(--edge);
   border-radius: 0.75rem;
+}
+
+/* Jetzt: die Temperatur trägt die Farbe der Außentemperatur (--t), der Rest bleibt in Textfarben */
+.now {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 1rem;
+  border-radius: 1.25rem;
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in oklch, var(--t) 20%, transparent), transparent 62%), var(--surface);
+}
+
+.now-body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1.25rem;
+  align-items: center;
+}
+
+.now-temp {
+  font: 800 clamp(3rem, 14vw, 5rem) / 0.95 var(--display);
+  letter-spacing: -0.03em;
+  color: var(--t);
+}
+
+.now-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.now-cond {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.icon svg {
+  display: block;
+}
+
+@media (max-width: 420px) {
+  .now-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Ampel: vier Lampen sind Zierde (aria-hidden), Stufe, Wort und Satz stehen als Text daneben.
+   Die Stufenfarbe liegt in --lv (per style.setProperty gesetzt), die Lampen haben je eine eigene. */
+.verdict {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.875rem;
+  align-items: start;
+  padding: 1rem;
+  border-radius: 1.125rem;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--lv, var(--ok));
+  background: color-mix(in oklch, var(--lv, var(--ok)) 9%, var(--bg));
+}
+
+.lamp {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  padding: 0.4375rem;
+  border-radius: 0.75rem;
+  background: oklch(12% 0.01 252);
+}
+
+.lamp i {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: oklch(28% 0.01 252);
+}
+
+.lamp .l0 { --c: var(--ok); }
+.lamp .l1 { --c: var(--warn); }
+.lamp .l2 { --c: var(--alarm); }
+.lamp .l3 { --c: var(--crit); }
+
+.lamp i.on {
+  background: var(--c);
+  box-shadow: 0 0 0.75rem var(--c);
+}
+
+.verdict-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.verdict-body h2 {
+  color: var(--lv, var(--fg));
+}
+
+.verdict-action {
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.reasons {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
+/* Warnungen des Deutschen Wetterdienstes: Wortlaut unverändert, der Rahmen nur zur Auffälligkeit */
+.alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.alert-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.875rem 1rem;
+  border-radius: 0.875rem;
+  border: 1px solid color-mix(in oklch, var(--crit) 50%, transparent);
+  background: color-mix(in oklch, var(--crit) 16%, var(--bg));
+}
+
+.alert-item h3 {
+  font-family: var(--display);
+}
+
+.alert-time {
+  font-weight: 700;
+}
+
+.alert-text {
+  white-space: pre-line;
+}
+
+/* Heute und die nächsten zwei Tage: eine Spalte auf dem Handy, ab 720 px drei nebeneinander */
+.days-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.days {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.625rem;
+}
+
+@media (min-width: 720px) {
+  .days {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.day {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.875rem;
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.day-date {
+  color: var(--muted);
+}
+
+.day-cond {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.day-range {
+  font-weight: 700;
+}
+
+.day-note {
+  color: var(--muted);
 }
