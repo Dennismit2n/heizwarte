@@ -16,6 +16,8 @@
  * hw:active fehlt oder ins Leere zeigt, und wann der Umschalter im Kopf steht.
  * Ganz am Ende airRows (BAUPLAN Abschnitt 8, Block 10): die Lüftungsfenster hinter „Mehr anzeigen“ als Sätze, das beste
  * mit airBest, airNone ohne Fenster, der Erklärsatz mit Raumtaupunkt und Wunschtemperatur, leer ohne Modell.
+ * Zuletzt chartRows (BAUPLAN Abschnitt 8, Block 9): die Legende der Kurve mit der 25-km-Grenze der zweiten Meinung und der
+ * Satz mit Tiefst- und Höchstwert.
  */
 'use strict';
 
@@ -26,7 +28,7 @@ const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
 const {
-  verdictLines, planRows, airRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+  verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
   STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
   MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
 } = require('../js/app.js');
@@ -1351,4 +1353,110 @@ test('airRows: rein, ändert weder Modell noch Ort und liefert bei gleicher Eing
   const b = airRows(view.m, place, airFmtFor(view).fmt);
   assert.deepEqual(a, b);
   assert.equal(JSON.stringify([view.m, place, view.now]), vorher);
+});
+
+// ---------------------------------------------------------------------------------------------
+// chartRows: Legende und Satz unter der Kurve (BAUPLAN Abschnitt 8, Block 9)
+// ---------------------------------------------------------------------------------------------
+
+// Eine Ansicht mit zweiter Meinung: Station in distance Metern (undefined: keine Station); name und height lassen sich
+// überschreiben. withMos gibt jeder Stunde einen MOSMIX-Wert.
+function chartView(distance, station, withMos) {
+  const view = viewAt('om-frost.json', JAN13_MS);
+  const hours = withMos === false ? view.m.hours : view.m.hours.map((h) => Object.assign({}, h, { mos: h.temp + 1 }));
+  view.m = Object.assign({}, view.m, {
+    hours,
+    mosStation: distance === undefined ? null : Object.assign({ name: 'BACKNANG', distance, height: 291 }, station || {})
+  });
+  view.v = heat.assess(view.m, view.now, PROF.radiator, []);
+  view.sum = Heizwarte.chart.summary(view.m, view.v);
+  view.lay = Heizwarte.chart.layout(view.m, view.v, view.now, { width: 360 });
+  return view;
+}
+
+// Formatierer wie chartFmt() in app.js, mit fester Sprache und der Ortszeit des Orts
+function chartFmtFor(view) {
+  const f = i18n.fmt;
+  return {
+    t: i18n.t,
+    deg: (x, digits) => f.deg(x, digits, 'de'),
+    num: roundedNum,
+    when: (ms) => f.when(ms, view.now.ms, view.m.tz, 'de')
+  };
+}
+
+test('chartRows: Hauptprognose, zweite Meinung mit Station und Höhe, Regenbalken – in der Reihenfolge der Kurve', () => {
+  const view = chartView(7692);
+  assert.equal(view.lay.mos, true);
+  const rows = chartRows(view.m, view.sum, chartFmtFor(view), view.lay.mos);
+  assert.deepEqual(rows.legend.map((r) => r.kind), ['main', 'second', 'rain']);
+  assert.deepEqual(rows.legend.map((r) => r.text), [
+    'Hauptprognose',
+    'Zweite Meinung (MOSMIX): Station BACKNANG auf 291 m Höhe',
+    'Regenwahrscheinlichkeit'
+  ]);
+});
+
+test('chartRows: zeichnet die Kurve keine zweite Meinung (Station weiter als 25 km, ohne Entfernung, keine Station, keine Werte) → chartMosFar', () => {
+  const faelle = [[25001], [40000], [null], [NaN], [undefined], [5000, {}, false]];
+  for (const [distance, station, withMos] of faelle) {
+    const view = chartView(distance, station, withMos);
+    assert.equal(view.lay.mos, false, 'distance ' + distance);
+    const rows = chartRows(view.m, view.sum, chartFmtFor(view), view.lay.mos);
+    assert.deepEqual(rows.legend.map((r) => r.kind), ['main', 'far', 'rain'], 'distance ' + distance);
+    assert.equal(rows.legend[1].text, 'Keine Wetterstation in der Nähe liefert eine zweite Meinung (MOSMIX).');
+  }
+  // ohne Angabe gilt: nicht gezeichnet
+  const view = chartView(7692);
+  assert.deepEqual(chartRows(view.m, view.sum, chartFmtFor(view)).legend.map((r) => r.kind), ['main', 'far', 'rain']);
+});
+
+test('chartRows: Legende und Linie widersprechen sich nie – dieselbe 25-km-Grenze, genau 25 km zählt noch als nah', () => {
+  for (const [distance, soll] of [[0, true], [7692, true], [25000, true], [25001, false], [40000, false]]) {
+    const view = chartView(distance);
+    assert.equal(view.lay.mos, soll, 'Linie bei ' + distance);
+    const kinds = chartRows(view.m, view.sum, chartFmtFor(view), view.lay.mos).legend.map((r) => r.kind);
+    assert.deepEqual(kinds, soll ? ['main', 'second', 'rain'] : ['main', 'far', 'rain'], 'Legende bei ' + distance);
+  }
+  // die Grenze steht in app.js (Fahrplan) und in chart.js (Linie) als Zahl: beide gleich
+  const quelleApp = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  const quelleChart = fs.readFileSync(path.join(__dirname, '..', 'js', 'chart.js'), 'utf8');
+  assert.equal(/const MOS_NEAR_M = (\d+);/.exec(quelleApp)[1], /const MOS_NEAR_M = (\d+);/.exec(quelleChart)[1]);
+});
+
+test('chartRows: eine gezeichnete zweite Meinung ohne Namen oder ohne Höhe der Station ergibt keine Legendenzeile', () => {
+  for (const station of [{ name: '' }, { height: null }, { height: NaN }, { name: undefined }]) {
+    const view = chartView(5000, station);
+    assert.equal(view.lay.mos, true);
+    const rows = chartRows(view.m, view.sum, chartFmtFor(view), view.lay.mos);
+    assert.deepEqual(rows.legend.map((r) => r.kind), ['main', 'rain'], JSON.stringify(station));
+  }
+});
+
+test('chartRows: der Satz nennt Tiefst- und Höchstwert mit einer Nachkommastelle und der Zeit in der Ortszeit', () => {
+  const view = chartView(7692);
+  const rows = chartRows(view.m, view.sum, chartFmtFor(view), view.lay.mos);
+  const f = i18n.fmt;
+  const soll = i18n.t('chartSummary', {
+    min: f.deg(view.sum.min, 1, 'de'),
+    minWhen: f.when(view.sum.minMs, view.now.ms, view.m.tz, 'de'),
+    max: f.deg(view.sum.max, 1, 'de'),
+    maxWhen: f.when(view.sum.maxMs, view.now.ms, view.m.tz, 'de')
+  });
+  assert.equal(rows.summary, soll);
+  assert.match(rows.summary, /^Tiefster Wert −\d+,\d° \((?:heute|morgen|übermorgen|Donnerstag|Freitag|Samstag|Sonntag|Montag|Dienstag|Mittwoch)[^)]* \d{1,2}:\d{2}\), höchster Wert \d+,\d° \(/);
+  assert.doesNotMatch(rows.summary, /NaN|undefined|\{/);
+  // ohne Zusammenfassung (zu alte Daten) kein Satz, die Legende bleibt
+  assert.equal(chartRows(view.m, null, chartFmtFor(view), true).summary, '');
+  // ohne Modell ist alles leer
+  assert.deepEqual(chartRows(null, null, chartFmtFor(view), true), { legend: [], summary: '' });
+});
+
+test('chartRows: rein, ändert weder Modell noch Zusammenfassung', () => {
+  const view = chartView(7692);
+  const vorher = JSON.stringify([view.m, view.sum]);
+  const a = chartRows(view.m, view.sum, chartFmtFor(view), true);
+  const b = chartRows(view.m, view.sum, chartFmtFor(view), true);
+  assert.deepEqual(a, b);
+  assert.equal(JSON.stringify([view.m, view.sum]), vorher);
 });

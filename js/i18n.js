@@ -207,10 +207,16 @@
 
       // --- Kurve, Lüften ---
       chartTitle: 'Temperaturverlauf, 72 Stunden',
-      chartLegendIcon: 'Hauptprognose (DWD ICON)',
+      // Ohne Modellname: Open-Meteo fragt nur in Deutschland, Österreich und der Schweiz das Modell DWD ICON ab, sonst
+      // sein bestes Modell (weather.modelFor); den Namen für DACH nennt die Fußzeile (footerWeather)
+      chartLegendIcon: 'Hauptprognose',
       chartLegendMos: 'Zweite Meinung (MOSMIX): Station {station} auf {height} m Höhe',
       chartLegendRain: 'Regenwahrscheinlichkeit',
       chartNow: 'jetzt',
+      // Zeilen des Kastens, der beim Berühren der Kurve erscheint ({t} fertig mit „°“, {p} nur die Zahl)
+      chartTipRain: 'Regenwahrscheinlichkeit {p} %',
+      chartTipDew: 'Taupunkt {t}',
+      chartTipMos: 'Zweite Meinung {t}',
       // {minWhen} und {maxWhen} kommen aus fmt.when
       chartSummary: 'Tiefster Wert {min} ({minWhen}), höchster Wert {max} ({maxWhen}).',
       chartMosFar: 'Keine Wetterstation in der Nähe liefert eine zweite Meinung (MOSMIX).',

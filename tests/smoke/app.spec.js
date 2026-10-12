@@ -784,6 +784,33 @@ async function expectFocusOnMore(page) {
   }).toBe('more');
 }
 
+// Die Kurve ist gezeichnet (Fall 11, BAUPLAN Abschnitt 8 Block 9): 72 Stunden als SVG mit Verlauf, Nachtbändern und
+// Tiefstwerten, der Satz darunter ist zugleich das aria-label des Bildes, die Legende nennt Hauptprognose und Regen,
+// die Farbskala trägt ihren Verlauf. Ohne passende MOSMIX-Stunden steht statt der zweiten Meinung chartMosFar.
+async function expectChartDrawn(page) {
+  const svg = page.locator('#chartSvg');
+  await expect(svg).toHaveAttribute('viewBox', /^0 0 \d+ \d+$/);
+  await expect(svg.locator('linearGradient#tg')).toHaveCount(1);
+  await expect(svg.locator('path.chart-line')).toHaveCount(1);
+  expect(await svg.locator('.chart-night').count(), 'mindestens drei Nachtbänder').toBeGreaterThanOrEqual(3);
+  expect(await svg.locator('.chart-nightmin').count(), 'Tiefstwerte der Nächte').toBeGreaterThanOrEqual(2);
+  await expect(svg.locator('.chart-now')).toHaveCount(1);
+  await expect(svg.locator('text', { hasText: deText('chartNow') })).toHaveCount(1);
+  await expect(svg.locator('text', { hasText: deText('dayToday') })).toHaveCount(1);
+  await expect(svg.locator('text', { hasText: deText('dayTomorrow') })).toHaveCount(1);
+  const summary = page.locator('#chartSummary');
+  await expect(summary).toHaveText(deRx('chartSummary'));
+  await expect(summary).toContainText('°');
+  await expect(svg).toHaveAttribute('aria-label', (await summary.textContent()).trim());
+  const legend = await page.locator('#chartLegend p').allTextContents();
+  expect(legend[0]).toBe(deText('chartLegendIcon'));
+  expect(legend[legend.length - 1]).toBe(deText('chartLegendRain'));
+  expect(legend.length === 3 && (legend[1] === deText('chartMosFar') || deRx('chartLegendMos').test(legend[1])), 'zweite Zeile: ' + legend[1]).toBe(true);
+  // Farbskala: der Verlauf steht als Hintergrund, die sechs Marken darunter
+  expect(await page.locator('#scale').evaluate((e) => getComputedStyle(e).backgroundImage)).toMatch(/linear-gradient/);
+  await expect(page.locator('.scale-labels span')).toHaveCount(6);
+}
+
 test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem Neuladen offen, „Weniger anzeigen“ löscht hw:more', async ({ page }) => {
   const net = await mockNet(page);
   await startClock(page);
@@ -813,6 +840,7 @@ test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem
   await expect(air).toBeVisible();
   await expect(page.locator('#chart h2')).toHaveText(deText('chartTitle'));
   await expect(page.locator('#chartSvg')).toHaveAttribute('role', 'img');
+  await expectChartDrawn(page);
   await expect(page.locator('#air h2')).toHaveText(deText('airTitle'));
   expect(await storedMore(page)).toBe('true');
   await expectFocusOnMore(page);
@@ -883,6 +911,96 @@ test('Fall 11: ist die Außenluft zu feucht, steht airNone statt der Fenster; de
   await expect(page.locator('#airNone')).toHaveText(deText('airNone'));
   await expect(page.locator('#airNote')).toHaveText(deRx('airNote'));
   await expectFocusOnMore(page);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 11: nahe Station → zweite Meinung in Legende und gestrichelter Linie; Zeiger und Finger öffnen den Kasten; Größenänderung zeichnet nur die Kurve neu', async ({ page }) => {
+  const net = await mockNet(page);
+  // Bright Sky: ein MOSMIX-Wert in einer Stunde des Fensters (14.01., 12:00 Berlin), Station BACKNANG in 7,7 km
+  const bs = JSON.parse(fixtureText('bs-buerg.json'));
+  bs.weather[0].timestamp = '2026-01-14T11:00:00+00:00';
+  bs.weather[0].temperature = 2.5;
+  net.on.weather = (route) => answer(route, bs);
+  await startClock(page);
+  await setUpByClicks(page);
+  await page.locator('#more').click();
+  await expect(page.locator('#chart')).toBeVisible();
+
+  const svg = page.locator('#chartSvg');
+  const tip = page.locator('#chartTip');
+  const legend = page.locator('#chartLegend p');
+  await expect(legend).toHaveCount(3);
+  await expect(legend.nth(1)).toHaveText(deText('chartLegendMos', { station: 'BACKNANG', height: 291 }));
+  await expect(svg.locator('path.chart-mos')).toHaveCount(1);
+  await expect(page.locator('#chartLegend .legend-swatch')).toHaveCount(3);
+  await expect(tip).toBeHidden();
+
+  // Zeiger (Maus): der Kasten zeigt die nächste Stunde, Linie und Punkt erscheinen; weg vom Bild verschwindet alles
+  await svg.hover({ position: { x: 150, y: 100 } });
+  await expect(tip).toBeVisible();
+  await expect(tip.locator('.chart-tip-head')).toContainText(':');
+  await expect(tip.locator('b')).toContainText('°');
+  await expect(tip.locator('.chart-tip-feels')).toHaveText(deRx('nowFeels'));
+  await expect(tip).toContainText(deText('chartTipRain').split(' {')[0]);
+  await expect(svg.locator('#chartCur')).toHaveAttribute('opacity', '0.5');
+  await expect(svg.locator('#chartDot')).toHaveAttribute('opacity', '1');
+  const inside = await tip.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const b = el.parentElement.getBoundingClientRect();
+    return r.left >= b.left - 1 && r.right <= b.right + 1;
+  });
+  expect(inside, 'der Kasten bleibt im Bild').toBe(true);
+  await page.mouse.move(2, 2);
+  await expect(tip).toBeHidden();
+  await expect(svg.locator('#chartCur')).toHaveAttribute('opacity', '0');
+
+  // Finger (nur im Handy-Projekt): Tippen zeigt den Kasten, er bleibt nach dem Loslassen; ein Tippen daneben schließt ihn
+  if (test.info().project.name === 'phone') {
+    await svg.tap({ position: { x: 200, y: 100 } });
+    await expect(tip).toBeVisible();
+    await page.locator('#chart h2').tap();
+    await expect(tip).toBeHidden();
+  }
+
+  // Größenänderung: nur die Kurve passt ihre Breite an (viewBox = Breite der Spalte, 320 bis 720), der Rest bleibt stehen
+  const widthOf = () => page.locator('.chart-wrap').evaluate((e) => Math.round(Math.min(720, Math.max(320, e.clientWidth))));
+  const viewBoxOf = () => svg.getAttribute('viewBox');
+  expect(await viewBoxOf()).toMatch(new RegExp('^0 0 ' + (await widthOf()) + ' \\d+$'));
+  const before = await viewBoxOf();
+  const original = page.viewportSize();
+  const fetches = net.count('forecast');
+  await page.setViewportSize({ width: 600, height: original.height });
+  await settle(page);
+  await expect.poll(viewBoxOf).not.toBe(before);
+  expect(await viewBoxOf()).toMatch(new RegExp('^0 0 ' + (await widthOf()) + ' \\d+$'));
+  await expect(page.locator('#more')).toHaveAttribute('aria-expanded', 'true');
+  expect(net.count('forecast'), 'die Größenänderung ruft nichts ab').toBe(fetches);
+  await expectNoHorizontalScroll(page, 'Kurve bei 600 px');
+  await page.setViewportSize(original);
+  await settle(page);
+  await expect.poll(viewBoxOf).toBe(before);
+  await expectNoHorizontalScroll(page, 'Kurve bei ' + original.width + ' px');
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 11: ohne MOSMIX-Stunden im Fenster steht chartMosFar; im hellen Theme trägt die Kurve die hellen Farben', async ({ page }) => {
+  const net = await mockNet(page);
+  await startClock(page);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await setUpByClicks(page);
+  await page.locator('#more').click();
+  const svg = page.locator('#chartSvg');
+  await expect(page.locator('#chartLegend p').nth(1)).toHaveText(deText('chartMosFar'));
+  await expect(svg.locator('path.chart-mos')).toHaveCount(0);
+  const stops = () => svg.locator('linearGradient#tg stop').first().getAttribute('stop-color');
+  const lightness = async () => Number(/oklch\(([\d.]+)%/.exec(await stops())[1]);
+  expect(await lightness(), 'dunkel: helle Temperaturfarben (L ≥ 62 %)').toBeGreaterThanOrEqual(62);
+  const dark = await page.locator('#scale').evaluate((e) => getComputedStyle(e).backgroundImage);
+  // System auf hell: die Kurve und die Skala zeichnen sich neu, mit den dunklen Schriftfarben der hellen Tabelle
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect.poll(lightness).toBeLessThanOrEqual(48);
+  const light = await page.locator('#scale').evaluate((e) => getComputedStyle(e).backgroundImage);
+  expect(light).not.toBe(dark);
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });
 

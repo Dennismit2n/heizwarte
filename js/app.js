@@ -6,8 +6,8 @@
  * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Bis zu
  * fünf Orte: Umschalter im Kopf, Radio je Ort in den Einstellungen, „Ort hinzufügen“ als Nachtrag ab S2. Dazu die
  * Schwellen für Fortgeschrittene und die Theme-Wahl System/Hell/Dunkel (boot.js setzt sie vor dem ersten Paint).
- * Der Knopf „Mehr anzeigen“ (Blöcke 8 bis 10) klappt Kurve und Lüften auf; die Lüftungsfenster stehen schon, die
- * Kurve ist bis jetzt nur ein Gerüst. Sprache und das Zeichnen der Kurve kommen in den nächsten Schritten dazu.
+ * Der Knopf „Mehr anzeigen“ (Blöcke 8 bis 10) klappt Kurve und Lüften auf; die Kurve der nächsten 72 Stunden zeichnet
+ * chart.js (layout, summary, bind), die Lüftungsfenster rechnet airRows. Die Sprachwahl in den Einstellungen kommt in einem späteren Schritt dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
  * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
@@ -1843,6 +1843,146 @@
     $('air').hidden = !(rows.slots.length || rows.none);
   }
 
+  // Die Texte zur Kurve als fertiger Text: { legend: [{ kind, text }], summary }. Rein: kein DOM, keine Module, keine
+  // Gerätezeit. model ist das Wettermodell, sum das Ergebnis von chart.summary() (oder null), mosDrawn das Feld mos aus
+  // chart.layout() (zeichnet die Kurve die zweite Meinung?); alles, was von Sprache und Ortszeit abhängt, bringt fmt mit:
+  //   fmt.t(key, vars)    Text zum Schlüssel
+  //   fmt.deg(x, digits)  Grad mit „°“
+  //   fmt.num(x)          Zahl mit höchstens einer Nachkommastelle
+  //   fmt.when(ms)        „heute 21:00“, „morgen 11:00“ oder „Dienstag 15:00“ in der Ortszeit des Orts
+  // legend: die Zeilen der Legende in der Reihenfolge der Kurve. 'main' ist die Hauptprognose, 'second' die zweite Meinung
+  // (MOSMIX): sie steht nur, wenn die Kurve die Linie wirklich zeichnet (Station bis 25 km und Werte für das Fenster;
+  // Legende und Linie widersprechen sich so nie) und Name und Höhe der Station bekannt sind. 'rain' sind die Regenbalken.
+  // Zeichnet die Kurve keine zweite Meinung, steht stattdessen 'far' (chartMosFar), ein Hinweis ohne Farbmuster, kein
+  // Fehler. summary: der Satz chartSummary mit Tiefst- und Höchstwert und ihrer Zeit, '' ohne Werte.
+  function chartRows(model, sum, fmt, mosDrawn) {
+    const rows = { legend: [], summary: '' };
+    if (!model) { return rows; }
+    rows.legend.push({ kind: 'main', text: fmt.t('chartLegendIcon') });
+    if (mosDrawn) {
+      const st = model.mosStation;
+      if (st && typeof st.name === 'string' && st.name && isNum(st.height)) {
+        rows.legend.push({ kind: 'second', text: fmt.t('chartLegendMos', { station: st.name, height: fmt.num(st.height) }) });
+      }
+    } else {
+      rows.legend.push({ kind: 'far', text: fmt.t('chartMosFar') });
+    }
+    rows.legend.push({ kind: 'rain', text: fmt.t('chartLegendRain') });
+    if (sum) {
+      rows.summary = fmt.t('chartSummary', {
+        min: fmt.deg(sum.min, 1),
+        minWhen: fmt.when(sum.minMs),
+        max: fmt.deg(sum.max, 1),
+        maxWhen: fmt.when(sum.maxMs)
+      });
+    }
+    return rows;
+  }
+
+  // Die Formatierer für chartRows aus dem Stand der Seite: Sprache aus i18n, Ortszeit des Orts (view.m.tz)
+  function chartFmt(view) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    return {
+      t,
+      deg: (x, digits) => f.deg(x, digits),
+      num: numAuto,
+      when: (ms) => f.when(ms, view.now.ms, tz, i18n.lang)
+    };
+  }
+
+  // Beschriftungen in der Zeichnung der Kurve (chart.layout): Tagesnamen, „jetzt“ und der lange Wochentag für den dritten Tag
+  function chartLabels(view) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    return {
+      today: t('dayToday'),
+      tomorrow: t('dayTomorrow'),
+      now: t('chartNow'),
+      wday: (ms) => f.wday(ms, tz, i18n.lang, true)
+    };
+  }
+
+  // Formatierer für den Kasten beim Berühren der Kurve (chart.bind): kurzer Wochentag, Uhrzeit des Orts, Wettertext
+  function chartTipFmt(view) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    return {
+      deg: (x, digits) => f.deg(x, digits),
+      num: (x, digits) => f.num(x, digits),
+      time: (ms) => f.time(ms, tz),
+      wday: (ms) => f.wday(ms, tz, i18n.lang, false),
+      wmo: (code) => i18n.wmo(code)
+    };
+  }
+
+  // Die Legende: je Zeile ein Farbmuster (nur Dekor, aria-hidden) und der Text daneben
+  function renderLegend(rows) {
+    const box = $('chartLegend');
+    box.replaceChildren();
+    for (const row of rows.legend) {
+      const item = make('p', 'chart-legend-item');
+      if (row.kind !== 'far') {
+        const swatch = make('span', 'legend-swatch is-' + row.kind);
+        swatch.setAttribute('aria-hidden', 'true');
+        item.appendChild(swatch);
+      }
+      item.appendChild(make('span', '', row.text));
+      box.appendChild(item);
+    }
+  }
+
+  // Der Abbau der Zeiger-Handler der letzten Zeichnung (chart.bind gibt ihn zurück)
+  let chartUnbind = null;
+
+  function unbindChart() {
+    if (chartUnbind) {
+      chartUnbind();
+      chartUnbind = null;
+    }
+  }
+
+  // Die Kurve (Block 9): wird nur gezeichnet, solange der Block offen ist (renderMore und onResize rufen nur dann).
+  // Breite = Breite der Spalte; die Zeichnung ist ein SVG-String aus chart.layout() (nur Zahlen und eigene Texte), der
+  // Satz darunter ist zugleich das aria-label des Bildes. Ohne Fenster (zu alte Daten) entfällt der Block.
+  function renderChart(view) {
+    const box = $('chart');
+    unbindChart();
+    const sum = view ? chart.summary(view.m, view.v) : null;
+    if (!view || !sum) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    const svg = $('chartSvg');
+    const lay = chart.layout(view.m, view.v, view.now, {
+      width: svg.parentElement.clientWidth,
+      scheme: currentScheme(),
+      labels: chartLabels(view),
+      fmt: chartFmt(view)
+    });
+    const rows = chartRows(view.m, sum, chartFmt(view), lay.mos);
+    renderLegend(rows);
+    setLine('chartSummary', rows.summary);
+    svg.setAttribute('aria-label', rows.summary);
+    svg.setAttribute('viewBox', '0 0 ' + lay.W + ' ' + lay.H);
+    setSvg(svg, lay.markup);
+    chartUnbind = chart.bind(svg, $('chartTip'), lay, { fmt: chartTipFmt(view), t });
+  }
+
+  // Größenänderung: nur die Kurve passt sich an die Breite an, entprellt (Abschnitt 5 app). Alles andere fließt von allein.
+  const RESIZE_MS = 150;
+  let resizeTimer = null;
+
+  function onResize() {
+    if (resizeTimer !== null) { clearTimeout(resizeTimer); }
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      if (state.screen !== 's-main' || !state.more || $('chart').hidden) { return; }
+      guard(() => renderChart(guard(buildView)));
+    }, RESIZE_MS);
+  }
+
   // „Mehr anzeigen“ / „Weniger anzeigen“: der Knopf bleibt derselbe, nur Beschriftung und aria-expanded wechseln (und
   // nur, wenn sich etwas ändert, damit ein Neuzeichnen beim Abruf nichts erneut vorliest). Ohne Daten gibt es nichts
   // aufzuklappen: Knopf und beide Blöcke entfallen, hw:more bleibt davon unberührt.
@@ -1857,8 +1997,10 @@
     $('chart').hidden = !open;
     if (open) {
       guard(() => renderAir(view));
+      guard(() => renderChart(view));
     } else {
       $('air').hidden = true;
+      unbindChart();
     }
   }
 
@@ -1872,9 +2014,9 @@
   }
 
   // Zeichnet den Hauptbildschirm neu, Block für Block; scheitert einer, laufen die übrigen weiter
-  // Farbskala unter der Kurve (#scale): der Verlauf folgt dem Schema. Das Element gehört zur Kurve, die ein späterer
-  // Schritt baut; solange es in index.html fehlt, tut die Funktion nichts. Deshalb document.getElementById statt $():
-  // markup.test.js verlangt für jede $()-ID einen Platz im Markup. setProperty ist CSSOM und mit der CSP vereinbar.
+  // Farbskala unter der Kurve (#scale): der Verlauf folgt dem Schema. Sie ist ein Teil des Kurvenblocks und liegt im
+  // Markup; die Wächter (document.getElementById, if (el)) stammen aus der Zeit davor und bleiben als Schutz. setProperty
+  // ist CSSOM und mit der CSP vereinbar.
   function renderScale() {
     const el = document.getElementById('scale');
     if (el) { el.style.setProperty('background', chart.scaleCss(currentScheme())); }
@@ -2567,8 +2709,9 @@
       refresh(false);
     }
     document.addEventListener('visibilitychange', onVisible);
+    // Größenänderung: nur die Kurve passt sich an (entprellt, onResize)
+    if (typeof root.addEventListener === 'function') { root.addEventListener('resize', onResize); }
     registerWorker();
-    // Es folgen: Größenänderung der Kurve (spätere Schritte)
   }
 
   if (typeof document !== 'undefined') {
@@ -2583,12 +2726,13 @@
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
   // afterDelete, cleanLabel), die Ortsliste
-  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher), die Lüftungsfenster (airRows) und das Theme
+  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher), die Lüftungsfenster (airRows), die Texte der Kurve
+  // (chartRows) und das Theme
   // (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      verdictLines, planRows, airRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+      verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
       MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
     };

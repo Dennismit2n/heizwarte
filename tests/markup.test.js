@@ -242,6 +242,13 @@ test('app.js: innerHTML nur in setSvg und nur mit chart.icon/chart.layout, kein 
   const echte = aufrufe(code, 'setSvg').filter((a) => a !== 'el, markup');
   assert.ok(echte.length >= 2, 'setSvg wird für Jetzt-Symbol und Tageskarten gebraucht');
   for (const a of echte) {
+    // Die Kurve braucht neben dem SVG-String auch Breite, Höhe und Stundenliste des Ergebnisses von chart.layout(); sie
+    // hält es in einer Konstanten und setzt deren .markup ein (M3 „kurve“: eine Ableitung des Vertrags, nicht seine Lockerung)
+    const lay = /^[\w$.()']+,\s*(\w+)\.markup$/.exec(a);
+    if (lay) {
+      assert.ok(code.includes('const ' + lay[1] + ' = chart.layout('), 'setSvg mit ' + lay[1] + '.markup, aber ' + lay[1] + ' ist nicht chart.layout(…)');
+      continue;
+    }
     assert.match(a, /^[\w$.()']+,\s*chart\.(icon|layout)\(/, 'setSvg mit etwas anderem als chart.icon/chart.layout: ' + a);
   }
 });
@@ -536,7 +543,7 @@ test('Mehr anzeigen: app.js verdrahtet Klick, hw:more, Beschriftung und Fokus; L
   // airRows wird nur von renderAir gerufen, und renderAir nur in renderMore und nur im Zweig „offen“
   assert.equal((code.match(/airRows\(/g) || []).length, 2, 'Definition und ein Aufruf');
   assert.equal((code.match(/renderAir\(/g) || []).length, 2, 'Definition und ein Aufruf, im guard von renderMore');
-  assert.match(code, /if \(open\) \{\s*guard\(\(\) => renderAir\(view\)\);\s*\} else \{\s*\$\('air'\)\.hidden = true;/);
+  assert.match(code, /if \(open\) \{\s*guard\(\(\) => renderAir\(view\)\);\s*guard\(\(\) => renderChart\(view\)\);\s*\} else \{\s*\$\('air'\)\.hidden = true;\s*unbindChart\(\);/);
   // render() zeichnet den Knopf mit; Sprachwechsel läuft über render() (onLanguage)
   assert.match(code, /guard\(\(\) => renderMore\(view\)\);/);
 });
@@ -1205,4 +1212,108 @@ test('Einstellungen: CSS mit 48-px-Knöpfen am Stepper, Zahl in der Mitte, Lösc
   assert.match(css, /\.step-btn\[aria-disabled="true"\]\s*\{[^}]*cursor: default;/);
   assert.match(css, /button\.danger\s*\{[^}]*border-color: var\(--crit\);/);
   assert.match(css, /\.place-item\s*\{[^}]*background: var\(--surface\);/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Die Kurve (BAUPLAN Abschnitt 8, Block 9; Abschnitt 5 chart und app)
+// ---------------------------------------------------------------------------------------------
+
+test('Kurve: Bild mit Kasten daneben, Satz darunter, dann die Farbskala mit sechs Marken; Kasten und Skala sind kein Inhalt für Vorleser', () => {
+  const slice = screenSlice('s-main');
+  const chart = slice.slice(slice.indexOf('id="chart"'), slice.indexOf('id="air"'));
+  const wrap = tags(chart).find((tg) => tg.attrs.class === 'chart-wrap');
+  assert.ok(wrap, 'ein Rahmen um Bild und Kasten, damit der Kasten über dem Bild stehen kann');
+  const tip = byId.get('chartTip');
+  assert.equal(tip.name, 'div');
+  assert.equal(tip.attrs['aria-hidden'], 'true');
+  assert.equal(tip.attrs.hidden, '', 'der Kasten ist zu Beginn verborgen');
+  assert.ok(chart.indexOf('class="chart-wrap"') < chart.indexOf('id="chartSvg"') && chart.indexOf('id="chartSvg"') < chart.indexOf('id="chartTip"'));
+  assert.ok(chart.indexOf('id="chartTip"') < chart.indexOf('id="chartSummary"'), 'der Satz steht unter Bild und Kasten');
+  assert.ok(chart.indexOf('id="chartSummary"') < chart.indexOf('id="scale"'), 'die Farbskala steht unter dem Satz');
+  assert.equal(byId.get('scale').name, 'div');
+  const box = tags(chart).find((tg) => tg.attrs.class === 'scale-box');
+  assert.equal(box.attrs['aria-hidden'], 'true', 'die Skala ist Dekor: die Zahlen stehen im Satz und im Kasten');
+  const marken = chart.slice(chart.indexOf('class="scale-labels"'));
+  assert.deepEqual(Array.from(marken.matchAll(/<span>([^<]*)<\/span>/g)).map((m) => m[1]), ['−10°', '0°', '10°', '18°', '25°', '32°']);
+  // Das Bild bleibt ein leeres <svg role="img">; chart.js füllt es zur Laufzeit
+  assert.match(chart, /<svg class="chart-svg" id="chartSvg" role="img"><\/svg>/);
+});
+
+test('CSS der Kurve: waagerechtes Ziehen gehört der Kurve, senkrechtes der Seite; Farben nur aus Variablen; Marken auf ihrer Temperatur', () => {
+  assert.match(css, /\.chart-svg\s*\{[^}]*touch-action: pan-y;/);
+  const tip = css.slice(css.indexOf('.chart-tip {'), css.indexOf('}', css.indexOf('.chart-tip {')));
+  assert.match(tip, /position: absolute;/);
+  assert.match(tip, /pointer-events: none;/, 'der Kasten fängt keine Zeigerereignisse ab');
+  assert.match(tip, /background: var\(--surface\);/);
+  assert.doesNotMatch(tip, /oklch\(|#[0-9a-f]{3,6}\b/i, 'der Kasten folgt dem Theme');
+  assert.match(css, /\.chart-wrap\s*\{\s*position: relative;/);
+  for (const [n, left] of [[2, '23.81%'], [3, '47.62%'], [4, '66.67%'], [5, '83.33%']]) {
+    assert.match(css, new RegExp('\\.scale-labels span:nth-child\\(' + n + '\\)\\s*\\{\\s*left: ' + left.replace('.', '\\.') + ';'));
+  }
+  // (v + 10) / 42: 0 → 23,81 %, 10 → 47,62 %, 18 → 66,67 %, 25 → 83,33 %
+  assert.deepEqual([0, 10, 18, 25].map((v) => (Math.round((v + 10) / 42 * 10000) / 100).toFixed(2) + '%'), ['23.81%', '47.62%', '66.67%', '83.33%']);
+  assert.match(css, /\.legend-swatch\.is-main\s*\{\s*background: var\(--t\);/);
+});
+
+test('app.js: die Kurve wird nur gezeichnet, solange sie offen ist, baut die alte Bindung ab und setzt Breite, viewBox und aria-label', () => {
+  const code = appCode;
+  // renderChart: Definition, der Aufruf in renderMore (im offenen Zweig) und der in onResize
+  assert.equal((code.match(/renderChart\(/g) || []).length, 3);
+  const draw = funktion(code, 'renderChart');
+  assert.match(draw, /^function renderChart\(view\) \{\s*const box = \$\('chart'\);\s*unbindChart\(\);/, 'zuerst die alte Bindung abbauen');
+  assert.match(draw, /chart\.summary\(view\.m, view\.v\)/);
+  assert.match(draw, /box\.hidden = true;/, 'ohne Fenster entfällt der Block');
+  assert.match(draw, /width: svg\.parentElement\.clientWidth/);
+  assert.match(draw, /scheme: currentScheme\(\)/);
+  assert.match(draw, /const lay = chart\.layout\(view\.m, view\.v, view\.now, \{/);
+  assert.match(draw, /svg\.setAttribute\('viewBox', '0 0 ' \+ lay\.W \+ ' ' \+ lay\.H\);/);
+  assert.match(draw, /svg\.setAttribute\('aria-label', rows\.summary\);/);
+  assert.match(draw, /setLine\('chartSummary', rows\.summary\);/);
+  assert.match(draw, /setSvg\(svg, lay\.markup\);/);
+  assert.match(draw, /chartUnbind = chart\.bind\(svg, \$\('chartTip'\), lay, \{ fmt: chartTipFmt\(view\), t \}\);/);
+  assert.doesNotMatch(draw, /innerHTML|style\./, 'Text per textContent, Farben per CSSOM in chart.js');
+  // die Legende: Texte per textContent (make), Farbmuster als Dekor
+  const legend = funktion(code, 'renderLegend');
+  assert.match(legend, /box\.replaceChildren\(\);/);
+  assert.match(legend, /swatch\.setAttribute\('aria-hidden', 'true'\);/);
+  assert.match(legend, /make\('span', '', row\.text\)/);
+  assert.doesNotMatch(legend, /innerHTML/);
+  // Block 9 wird nicht von render() selbst gerufen, sondern von renderMore – nur im Zweig „offen“
+  assert.doesNotMatch(funktion(code, 'render'), /renderChart/);
+  // Farbskala: bleibt in render(), unabhängig vom Block (wie in theme.test.js)
+  assert.match(funktion(code, 'render'), /guard\(renderScale\);/);
+});
+
+test('app.js: Größenänderung wird auf 150 ms entprellt und zeichnet nur die Kurve, nie die ganze Seite', () => {
+  const code = appCode;
+  assert.match(code, /const RESIZE_MS = 150;/);
+  assert.match(code, /root\.addEventListener\('resize', onResize\)/);
+  const resize = funktion(code, 'onResize');
+  assert.match(resize, /clearTimeout\(resizeTimer\)/);
+  assert.match(resize, /setTimeout\(\(\) => \{/);
+  assert.match(resize, /\}, RESIZE_MS\);/);
+  assert.match(resize, /state\.screen !== 's-main' \|\| !state\.more \|\| \$\('chart'\)\.hidden/, 'nur bei sichtbarer Kurve');
+  assert.match(resize, /guard\(\(\) => renderChart\(guard\(buildView\)\)\)/);
+  assert.doesNotMatch(resize, /\brender\(|renderMore|renderAir|refresh\(/, 'nur die Kurve');
+  // Sprach- und Themenwechsel laufen über render() → renderMore → renderChart
+  assert.match(funktion(code, 'onLanguage'), /if \(state\.screen === 's-main'\) \{ render\(\); \}/);
+  assert.match(funktion(code, 'onSchemeChange'), /render\(\)/);
+});
+
+test('app.js: Beschriftungen und Formatierer der Kurve kommen aus i18n und der Ortszeit des Orts, nicht aus dem Gerät', () => {
+  const labels = funktion(appCode, 'chartLabels');
+  assert.match(labels, /today: t\('dayToday'\)/);
+  assert.match(labels, /tomorrow: t\('dayTomorrow'\)/);
+  assert.match(labels, /now: t\('chartNow'\)/);
+  assert.match(labels, /wday: \(ms\) => f\.wday\(ms, tz, i18n\.lang, true\)/, 'langer Wochentag für den dritten Tag');
+  const tip = funktion(appCode, 'chartTipFmt');
+  assert.match(tip, /time: \(ms\) => f\.time\(ms, tz\)/);
+  assert.match(tip, /wday: \(ms\) => f\.wday\(ms, tz, i18n\.lang, false\)/, 'kurzer Wochentag im Kasten');
+  assert.match(tip, /wmo: \(code\) => i18n\.wmo\(code\)/);
+  assert.doesNotMatch(labels + tip + funktion(appCode, 'chartFmt'), /new Date|getHours|getDay|toLocale/);
+  // chart.js selbst: Datum und Uhrzeit nie über Date
+  const chartSrc = fs.readFileSync(path.join(ROOT, 'js', 'chart.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+  assert.doesNotMatch(chartSrc, /new Date|Date\.|Intl\.|getHours|toLocale/);
+  assert.doesNotMatch(chartSrc, /innerHTML|insertAdjacentHTML|outerHTML|setAttribute\(\s*['"]style|cssText/);
+  assert.doesNotMatch(chartSrc, /\bdocument\b/, 'bind() holt das Dokument aus svgEl.ownerDocument, layout() braucht keins');
 });
