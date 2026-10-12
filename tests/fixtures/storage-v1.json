@@ -1,0 +1,22 @@
+{
+  "hw:cache": {
+    "fetched": "2026-10-09T10:45",
+    "om": {
+      "latitude": 48.88,
+      "longitude": 9.44,
+      "elevation": 417,
+      "timezone": "Europe/Berlin",
+      "utc_offset_seconds": 7200,
+      "hourly_units": { "time": "iso8601", "temperature_2m": "°C" },
+      "hourly": {
+        "time": ["2026-10-09T09:00", "2026-10-09T10:00", "2026-10-09T11:00", "2026-10-09T12:00"],
+        "temperature_2m": [9.1, 10.4, 11.8, 12.6]
+      }
+    },
+    "mos": [["2026-10-09T09:00", 9.6], ["2026-10-09T10:00", 10.9], ["2026-10-09T11:00", 12.2]],
+    "alerts": []
+  },
+  "hw:leadMin": 3.5,
+  "hw:leadMax": 7,
+  "hw:comfort": 20
+}
