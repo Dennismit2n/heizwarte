@@ -10,6 +10,8 @@
  * Seit Review Runde 2 zusätzlich: die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen) über die
  * Uhrumstellung am 25.10.2026 und in Lissabon, der Jetzt-Block (currentOf) in der doppelten Stunde, der Umriss
  * (extentLine) ohne feste Einheit und die Hausnummer (extractNumber) mit „12/1“ und „5-7“.
+ * Am Ende die Regeln der Einstellungen (BAUPLAN Abschnitt 7 und 8): Stepper-Grenzen und Schrittweite, leadMin ≤ leadMax,
+ * die Höhenregel (Zahl von Hand, leer automatisch, ungültig nichts), Löschen mit Nachrücken und der Ortsname.
  */
 'use strict';
 
@@ -19,7 +21,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
-const { verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen } = require('../js/app.js');
+const {
+  verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+  STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel
+} = require('../js/app.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
 const i18n = Heizwarte.i18n;
@@ -823,4 +828,202 @@ test('extractNumber: Hausnummern mit Schrägstrich und Bindestrich, die Rangfolg
   assert.equal(geo.rank(hits, { housenumber: extractNumber('Hauptstraße 12 / 1') })[0].parts.housenumber, '12/1');
   const markt = [haus('5', 9.393), haus('5-7', 9.394)];
   assert.equal(geo.rank(markt, { housenumber: extractNumber('Am Markt 5-7') })[0].parts.housenumber, '5-7');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Einstellungen: Stepper, Höhe, Löschen, Ortsname (BAUPLAN Abschnitt 7 und 8)
+// ---------------------------------------------------------------------------------------------
+
+const STEP_FELDER = ['comfort', 'leadMin', 'leadMax'];
+
+test('Stepper: Grenzen und Schrittweite wie in Abschnitt 7, Einheit und Beschriftung stehen in de', () => {
+  assert.deepEqual(Object.keys(STEPPERS), STEP_FELDER);
+  const grenzen = (f) => [STEPPERS[f].min, STEPPERS[f].max, STEPPERS[f].step];
+  assert.deepEqual(grenzen('comfort'), [17, 23, 0.5]);
+  assert.deepEqual(grenzen('leadMin'), [0.5, 8, 0.5]);
+  assert.deepEqual(grenzen('leadMax'), [1, 10, 0.5]);
+  for (const f of STEP_FELDER) {
+    assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, STEPPERS[f].unit), f + ': Einheit');
+    assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, STEPPERS[f].label), f + ': Beschriftung');
+  }
+  // Zahl mit Einheit, wie der Stepper sie zeigt
+  assert.equal(i18n.t('unitCelsius', { n: roundedNum(20.5) }), '20,5 °C');
+  assert.equal(i18n.t('unitCelsius', { n: roundedNum(20) }), '20 °C');
+  assert.equal(i18n.t('unitHours', { n: roundedNum(3) }), '3 h');
+  assert.equal(i18n.t('unitHours', { n: roundedNum(0.5) }), '0,5 h');
+});
+
+test('Stepper: die Werte aller Heizarten liegen in den Grenzen, leadMin ≤ leadMax', () => {
+  for (const [typ, p] of Object.entries(heat.PROFILES)) {
+    if (typ === 'storage') {
+      assert.equal(p.leadMin, null);
+      assert.equal(p.leadMax, null);
+      continue;
+    }
+    assert.ok(p.leadMin >= STEPPERS.leadMin.min && p.leadMin <= STEPPERS.leadMin.max, typ + ' leadMin');
+    assert.ok(p.leadMax >= STEPPERS.leadMax.min && p.leadMax <= STEPPERS.leadMax.max, typ + ' leadMax');
+    assert.ok(p.leadMin <= p.leadMax, typ);
+  }
+});
+
+test('stepValue: halbe Schritte, am Rand bleibt der Wert, krumme und fremde Werte rasten ein', () => {
+  assert.equal(stepValue('comfort', 20, 1), 20.5);
+  assert.equal(stepValue('comfort', 20, -1), 19.5);
+  assert.equal(stepValue('comfort', 23, 1), 23);
+  assert.equal(stepValue('comfort', 22.5, 1), 23);
+  assert.equal(stepValue('comfort', 17, -1), 17);
+  assert.equal(stepValue('comfort', 17.5, -1), 17);
+  assert.equal(stepValue('leadMin', 0.5, -1), 0.5);
+  assert.equal(stepValue('leadMin', 8, 1), 8);
+  assert.equal(stepValue('leadMin', 3, 1), 3.5);
+  assert.equal(stepValue('leadMax', 1, -1), 1);
+  assert.equal(stepValue('leadMax', 10, 1), 10);
+  assert.equal(stepValue('leadMax', 9.5, 1), 10);
+  // ein krummer Wert rastet erst auf das Raster ein, dann folgt der Schritt
+  assert.equal(stepValue('comfort', 20.3, 1), 21);
+  assert.equal(stepValue('comfort', 20.2, -1), 19.5);
+  // außerhalb der Grenzen (kaputter Speicher) führt der erste Schritt zurück in den Bereich
+  assert.equal(stepValue('comfort', 30, -1), 23);
+  assert.equal(stepValue('comfort', 10, 1), 17);
+  assert.equal(stepValue('leadMax', 40, 1), 10);
+  // ohne Zahl: Raumtemperatur startet bei 20, die Aufheizzeiten bei ihrer unteren Grenze
+  assert.equal(stepValue('comfort', null, 1), 20.5);
+  assert.equal(stepValue('leadMin', NaN, 1), 1);
+  assert.equal(stepValue('leadMax', undefined, 1), 1.5);
+  // unbekanntes Feld ändert nichts
+  assert.equal(stepValue('nope', 5, 1), 5);
+});
+
+test('stepValue: von der unteren bis zur oberen Grenze in lauter halben Schritten, ohne einen auszulassen', () => {
+  for (const f of STEP_FELDER) {
+    const s = STEPPERS[f];
+    let v = s.min;
+    let n = 0;
+    while (stepValue(f, v, 1) !== v) {
+      const next = stepValue(f, v, 1);
+      assert.equal(next - v, 0.5, f + ' von ' + v);
+      v = next;
+      n++;
+    }
+    assert.equal(v, s.max, f + ' endet an der oberen Grenze');
+    assert.equal(n, (s.max - s.min) / 0.5, f + ': Anzahl der Schritte');
+    while (stepValue(f, v, -1) !== v) { v = stepValue(f, v, -1); }
+    assert.equal(v, s.min, f + ' kommt an die untere Grenze zurück');
+  }
+});
+
+test('applyStep: leadMin über leadMax zieht leadMax mit, leadMax unter leadMin zieht leadMin mit (Bürg index:509–510)', () => {
+  const v = { comfort: 20, leadMin: 3, leadMax: 6 };
+  assert.deepEqual(applyStep(v, 'leadMin', 1), { comfort: 20, leadMin: 3.5, leadMax: 6 });
+  assert.deepEqual(v, { comfort: 20, leadMin: 3, leadMax: 6 }, 'die Eingabe bleibt unberührt');
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: 6, leadMax: 6 }, 'leadMin', 1), { comfort: 20, leadMin: 6.5, leadMax: 6.5 });
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: 3, leadMax: 3 }, 'leadMax', -1), { comfort: 20, leadMin: 2.5, leadMax: 2.5 });
+  // leadMax kann nicht unter 1 fallen, und leadMin zieht dort nicht weiter
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: 1, leadMax: 1 }, 'leadMax', -1), { comfort: 20, leadMin: 1, leadMax: 1 });
+  // leadMin am oberen Rand: leadMax bleibt gleich hoch, nichts ändert sich
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: 8, leadMax: 8 }, 'leadMin', 1), { comfort: 20, leadMin: 8, leadMax: 8 });
+  // leadMax zieht bis 10 mit
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: 8, leadMax: 8 }, 'leadMax', 1), { comfort: 20, leadMin: 8, leadMax: 8.5 });
+  // die Raumtemperatur rührt die Aufheizzeiten nicht an
+  assert.deepEqual(applyStep(v, 'comfort', 1), { comfort: 20.5, leadMin: 3, leadMax: 6 });
+  // Nachtspeicher: keine Aufheizzeiten, die Raumtemperatur lässt sich trotzdem ändern
+  assert.deepEqual(applyStep({ comfort: 20, leadMin: null, leadMax: null }, 'comfort', -1), { comfort: 19.5, leadMin: null, leadMax: null });
+  // unbekanntes Feld
+  assert.deepEqual(applyStep(v, 'nope', 1), v);
+});
+
+test('applyStep: nach beliebig vielen Schritten liegt alles im Bereich, auf dem Raster, und leadMin ≤ leadMax', () => {
+  let seed = 20261012;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  let v = { comfort: 20, leadMin: 3, leadMax: 6 };
+  for (let i = 0; i < 5000; i++) {
+    const feld = STEP_FELDER[Math.floor(rnd() * 3)];
+    v = applyStep(v, feld, rnd() < 0.5 ? -1 : 1);
+    for (const f of STEP_FELDER) {
+      assert.ok(v[f] >= STEPPERS[f].min && v[f] <= STEPPERS[f].max, f + ' = ' + v[f] + ' im Schritt ' + i);
+      assert.equal((v[f] * 2) % 1, 0, f + ' = ' + v[f] + ' liegt nicht auf dem Raster');
+    }
+    assert.ok(v.leadMin <= v.leadMax, 'leadMin ' + v.leadMin + ' > leadMax ' + v.leadMax + ' im Schritt ' + i);
+  }
+});
+
+test('parseElev: leer, Zahl von −500 bis 9000 (ganze Meter) oder ungültig', () => {
+  for (const leer of ['', '   ', undefined, null]) { assert.deepEqual(parseElev(leer, false), { kind: 'empty' }, String(leer)); }
+  assert.deepEqual(parseElev('500', false), { kind: 'ok', n: 500 });
+  assert.deepEqual(parseElev(' 417 ', false), { kind: 'ok', n: 417 });
+  assert.deepEqual(parseElev('-500', false), { kind: 'ok', n: -500 });
+  assert.deepEqual(parseElev('9000', false), { kind: 'ok', n: 9000 });
+  assert.deepEqual(parseElev('416.6', false), { kind: 'ok', n: 417 });
+  assert.deepEqual(parseElev('0', false), { kind: 'ok', n: 0 });
+  assert.ok(Object.is(parseElev('-0', false).n, 0), 'minus null wird null');
+  assert.ok(Object.is(parseElev('-0.4', false).n, 0), 'auch gerundet kein minus null');
+  for (const schlecht of ['-501', '9001', '9000.4', 'abc', '1,5', '12abc', 'Infinity', 'NaN']) {
+    assert.deepEqual(parseElev(schlecht, false), { kind: 'bad' }, schlecht);
+  }
+  // der Browser meldet „abc“ in einem number-Feld als badInput mit leerem value
+  assert.deepEqual(parseElev('', true), { kind: 'bad' });
+});
+
+test('elevPatch: Zahl heißt von Hand, leer heißt automatisch (auch ohne Antwort), ungültig speichert nichts', () => {
+  assert.deepEqual(elevPatch(parseElev('500', false), null), { elev: 500, elevAuto: false });
+  assert.deepEqual(elevPatch(parseElev('500', false), 417), { elev: 500, elevAuto: false }, 'die Zahl gilt, nicht die Antwort');
+  assert.deepEqual(elevPatch(parseElev('', false), 417), { elev: 417, elevAuto: true });
+  assert.deepEqual(elevPatch(parseElev('', false), 416.6), { elev: 417, elevAuto: true });
+  // Dienst ohne Antwort: Open-Meteo nimmt sein eigenes Höhenmodell (elev null), die Höhe gilt trotzdem als automatisch
+  assert.deepEqual(elevPatch(parseElev('', false), null), { elev: null, elevAuto: true });
+  assert.deepEqual(elevPatch(parseElev('', false), undefined), { elev: null, elevAuto: true });
+  assert.deepEqual(elevPatch(parseElev('', false), NaN), { elev: null, elevAuto: true });
+  assert.equal(elevPatch(parseElev('9001', false), 417), null);
+  assert.equal(elevPatch(parseElev('', true), 417), null);
+  assert.equal(elevPatch(undefined, 417), null);
+});
+
+test('afterDelete: der aktive Ort bleibt, sonst rückt der nächste nach, am Ende der davor, ohne Ort null', () => {
+  const [a, b, c] = ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'].map((id) => ({ id }));
+  const alle = [a, b, c];
+  const ids = (r) => r.places.map((p) => p.id);
+
+  let r = afterDelete(alle, b.id, b.id);
+  assert.deepEqual(ids(r), [a.id, c.id]);
+  assert.equal(r.activeId, c.id, 'der Ort, der an die Stelle rutscht');
+  assert.equal(r.switched, true);
+
+  r = afterDelete(alle, c.id, c.id);
+  assert.deepEqual(ids(r), [a.id, b.id]);
+  assert.equal(r.activeId, b.id, 'am Listenende der davor');
+
+  r = afterDelete(alle, a.id, a.id);
+  assert.equal(r.activeId, b.id);
+
+  r = afterDelete(alle, a.id, b.id);
+  assert.deepEqual(ids(r), [b.id, c.id]);
+  assert.equal(r.activeId, b.id, 'ein anderer Ort gelöscht: der aktive bleibt');
+  assert.equal(r.switched, false);
+
+  r = afterDelete([a], a.id, a.id);
+  assert.deepEqual(r.places, []);
+  assert.equal(r.activeId, null);
+  assert.equal(r.switched, true);
+
+  r = afterDelete(alle, 'gibtEsNicht', a.id);
+  assert.deepEqual(ids(r), [a.id, b.id, c.id]);
+  assert.equal(r.activeId, a.id);
+  assert.equal(r.switched, false);
+  assert.equal(alle.length, 3, 'die Eingabe bleibt unberührt');
+});
+
+test('cleanLabel: getrimmt, auf 40 Zeichen gekürzt, leer behält den alten Namen', () => {
+  assert.equal(cleanLabel('  Mama ', 'Opa'), 'Mama');
+  assert.equal(cleanLabel('', 'Opa'), 'Opa');
+  assert.equal(cleanLabel('   ', 'Opa'), 'Opa');
+  assert.equal(cleanLabel(null, 'Opa'), 'Opa');
+  assert.equal(cleanLabel(undefined, 'Opa'), 'Opa');
+  assert.equal(cleanLabel('x'.repeat(50), 'Opa'), 'x'.repeat(40));
+  // nach dem Kürzen bleibt kein Leerzeichen am Ende, und ein Emoji reißt nicht in der Mitte
+  assert.equal(cleanLabel('a'.repeat(39) + ' b', 'Opa'), 'a'.repeat(39));
+  assert.equal(Array.from(cleanLabel('😀'.repeat(45), 'Opa')).length, 40);
+  assert.equal(cleanLabel('Winnenden-Bürg', 'Opa'), 'Winnenden-Bürg');
 });

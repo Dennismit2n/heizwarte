@@ -225,6 +225,97 @@
     <section class="screen" id="s-settings" hidden>
       <button type="button" class="back" id="btnSettingsBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="settingsTitle"></h2>
+
+      <section class="set-block" aria-labelledby="h-set-places">
+        <h3 id="h-set-places" data-i18n="settingsPlaces"></h3>
+        <ul class="place-list" id="settingsPlaceList"></ul>
+      </section>
+
+      <section class="set-block" aria-labelledby="h-set-heat">
+        <h3 id="h-set-heat" data-i18n="settingsHeat"></h3>
+        <p class="hint" id="settingsHeatPlace"></p>
+        <div class="choices" role="radiogroup" aria-labelledby="h-set-heat">
+          <label class="choice">
+            <input type="radio" name="settingsHeatType" id="rs-radiator" value="radiator">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="choice-body">
+              <span class="choice-title" data-i18n="profileRadiator"></span>
+              <span class="choice-hint" data-i18n="profileHintRadiator"></span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="settingsHeatType" id="rs-floorScreed" value="floorScreed">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="choice-body">
+              <span class="choice-title" data-i18n="profileFloorScreed"></span>
+              <span class="choice-hint" data-i18n="profileHintFloorScreed"></span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="settingsHeatType" id="rs-floorDry" value="floorDry">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="choice-body">
+              <span class="choice-title" data-i18n="profileFloorDry"></span>
+              <span class="choice-hint" data-i18n="profileHintFloorDry"></span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="settingsHeatType" id="rs-heatpumpFloor" value="heatpumpFloor">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="choice-body">
+              <span class="choice-title" data-i18n="profileHeatpumpFloor"></span>
+              <span class="choice-hint" data-i18n="profileHintHeatpumpFloor"></span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="settingsHeatType" id="rs-storage" value="storage">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="choice-body">
+              <span class="choice-title" data-i18n="profileStorage"></span>
+              <span class="choice-hint" data-i18n="profileHintStorage"></span>
+            </span>
+          </label>
+        </div>
+        <p class="hint" data-i18n="profileRule"></p>
+        <div class="step-field" id="stepComfort">
+          <p class="step-label" id="lblComfort" data-i18n="settingsComfort"></p>
+          <div class="stepper" role="group" aria-labelledby="lblComfort">
+            <button type="button" class="step-btn" id="comfortDown"><span aria-hidden="true">−</span></button>
+            <output id="comfortOut" for="comfortDown comfortUp" aria-live="polite"></output>
+            <button type="button" class="step-btn" id="comfortUp"><span aria-hidden="true">+</span></button>
+          </div>
+        </div>
+        <div class="step-field" id="stepLeadMin">
+          <p class="step-label" id="lblLeadMin" data-i18n="settingsLeadMin"></p>
+          <div class="stepper" role="group" aria-labelledby="lblLeadMin">
+            <button type="button" class="step-btn" id="leadMinDown"><span aria-hidden="true">−</span></button>
+            <output id="leadMinOut" for="leadMinDown leadMinUp" aria-live="polite"></output>
+            <button type="button" class="step-btn" id="leadMinUp"><span aria-hidden="true">+</span></button>
+          </div>
+        </div>
+        <div class="step-field" id="stepLeadMax">
+          <p class="step-label" id="lblLeadMax" data-i18n="settingsLeadMax"></p>
+          <div class="stepper" role="group" aria-labelledby="lblLeadMax">
+            <button type="button" class="step-btn" id="leadMaxDown"><span aria-hidden="true">−</span></button>
+            <output id="leadMaxOut" for="leadMaxDown leadMaxUp" aria-live="polite"></output>
+            <button type="button" class="step-btn" id="leadMaxUp"><span aria-hidden="true">+</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-block" aria-labelledby="h-set-elev">
+        <h3 id="h-set-elev" data-i18n="settingsElev"></h3>
+        <p id="settingsElevText"><span id="settingsElevVal"></span> <span id="settingsElevAuto" class="hint" data-i18n="setupElevAuto" hidden></span></p>
+        <button type="button" id="btnSettingsElev" data-i18n="btnChange" aria-expanded="false" aria-controls="settingsElevEdit"></button>
+        <div class="field" id="settingsElevEdit" hidden>
+          <label for="settingsElevInput" data-i18n="setupElevLabel"></label>
+          <input type="number" id="settingsElevInput" inputmode="numeric" min="-500" max="9000" step="1" aria-describedby="settingsElevHint">
+          <p class="hint" id="settingsElevHint" data-i18n="setupElevHint"></p>
+          <div class="err" id="settingsElevErr" role="alert" tabindex="-1"></div>
+        </div>
+      </section>
+
+      <button type="button" class="back" id="btnSettingsBack2" data-i18n="btnBack"></button>
     </section>
   </main>
   <footer>

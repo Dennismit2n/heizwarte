@@ -9,7 +9,8 @@
  * kommen aus den deutschen Planschlüsseln in js/i18n.js (I18N.de), nicht abgeschrieben aus der Oberfläche.
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
- * kommen mit den Meilensteinen 3 und 5 dazu.
+ * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen) steht schon.
+ * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5.
  */
 'use strict';
 
@@ -277,7 +278,7 @@ async function expectHeadingOrder(page, where) {
   expect(heads.filter((h) => h.text === ''), 'leere Überschrift: ' + where).toEqual([]);
 }
 
-// Geht alle Bildschirme der Einrichtung und den Hauptbildschirm durch und ruft check(Name) auf jedem auf
+// Geht alle Bildschirme der Einrichtung, den Hauptbildschirm und die Einstellungen durch und ruft check(Name) auf jedem auf
 async function walkScreens(page, net, check) {
   const seen = [];
   const visit = async (name) => { seen.push(name); await check(name); };
@@ -322,8 +323,12 @@ async function walkScreens(page, net, check) {
   await expect(page.locator('#s-main')).toBeVisible();
   await expect(page.locator('#nowTemp')).toContainText('°');
   await visit('Hauptbildschirm');
-  // alle neun Stellen wurden geprüft, kein Zweig hat sie übersprungen
-  expect(seen, 'geprüfte Bildschirme').toHaveLength(9);
+
+  await page.locator('#settingsBtn').click();
+  await expect(page.locator('#s-settings')).toBeVisible();
+  await visit('Einstellungen');
+  // alle zehn Stellen wurden geprüft, kein Zweig hat sie übersprungen
+  expect(seen, 'geprüfte Bildschirme').toHaveLength(10);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -712,4 +717,249 @@ test('Fall 10: visibilitychange ruft erneut ab, aber nicht innerhalb von 60 Seku
   await expect.poll(() => net.count('forecast')).toBe(first + 1);
   await expect(page.locator('#reload')).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.locator('#nowTemp')).toContainText('°');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 12: die Einstellungen (Heizart, Höhe, Stepper, Ortsliste)
+// ---------------------------------------------------------------------------------------------
+
+// Gespeicherte Orte aus localStorage (hw:places)
+function storedPlaces(page) {
+  return page.evaluate(() => JSON.parse(localStorage.getItem('hw:places') || 'null'));
+}
+
+// Die Startzeile der ersten Karte im Fahrplan („Start ab 16:00“) als Minuten seit Mitternacht; die Karten stehen im
+// Markup auch dann, wenn der Hauptbildschirm gerade verborgen ist
+async function firstStartMinutes(page) {
+  const text = await page.locator('#planList li').first().locator('.plan-when').textContent();
+  const m = /(\d{1,2}):(\d{2})/.exec(text || '');
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+async function openSettings(page) {
+  await page.locator('#settingsBtn').click();
+  await expect(page.locator('#s-settings')).toBeVisible();
+  await expectFocusOnHeading(page, 's-settings');
+}
+
+test('Fall 12: Heizart ändert den Plan, Höhe löst einen neuen Abruf aus, „Zurück“ führt auf #settingsBtn', async ({ page }) => {
+  const net = await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+
+  // Heizkörper: kurze Aufheizzeit, später Start
+  const radiatorStart = await firstStartMinutes(page);
+  expect(radiatorStart, 'Startzeile der ersten Nacht mit Heizkörper').not.toBeNull();
+
+  await openSettings(page);
+  await expect(page.locator('#s-settings h2')).toHaveText(deText('settingsTitle'));
+  await expect(page.locator('#rs-radiator')).toBeChecked();
+
+  // Fußbodenheizung im Estrich: lange Aufheizzeit, der Start rückt vor. Ampel und Fahrplan ziehen entprellt nach,
+  // ohne dass die Seite neu lädt oder die Einstellungen verlassen werden.
+  await page.locator('#rs-floorScreed').click();
+  await expect.poll(async () => radiatorStart - (await firstStartMinutes(page)),
+    { message: 'Start der ersten Nacht rückt um mindestens eine Stunde vor' }).toBeGreaterThanOrEqual(60);
+  await expect(page.locator('#planHead')).toHaveText(deText('planFor', { profile: deText('profileFloorScreed') }));
+  const heat = (await storedPlaces(page))[0].heat;
+  expect(heat).toMatchObject({ type: 'floorScreed', leadMin: 3, leadMax: 6, confirmed: true });
+  await expect(page.locator('#leadMinOut')).toHaveText(deText('unitHours', { n: '3' }));
+  await expect(page.locator('#leadMaxOut')).toHaveText(deText('unitHours', { n: '6' }));
+
+  // Höhe von Hand: Enter speichert und ruft sofort neu ab (auch innerhalb von 60 s), die URL trägt die neue Höhe
+  await expect(page.locator('#settingsElevEdit')).toBeHidden();
+  await expect(page.locator('#settingsElevVal')).toHaveText(deText('setupElev', { m: 417 }));
+  await expect(page.locator('#settingsElevAuto')).toBeVisible();
+  const forecasts = net.count('forecast');
+  await page.locator('#btnSettingsElev').click();
+  await expect(page.locator('#settingsElevInput')).toBeVisible();
+  await expect(page.locator('#settingsElevInput')).toBeFocused();
+  await page.locator('#settingsElevInput').fill('500');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => net.count('forecast')).toBe(forecasts + 1);
+  expect(net.log.forecast[net.log.forecast.length - 1]).toMatch(/[?&]elevation=500(&|$)/);
+  expect((await storedPlaces(page))[0]).toMatchObject({ elev: 500, elevAuto: false });
+  await expect(page.locator('#settingsElevVal')).toHaveText(deText('setupElev', { m: 500 }));
+  await expect(page.locator('#settingsElevAuto')).toBeHidden();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+
+  // Feld leeren: die Höhe wird neu abgefragt (elev.json = 417 m) und gilt wieder als automatisch
+  const elevations = net.count('elevation');
+  const forecasts2 = net.count('forecast');
+  await page.locator('#settingsElevInput').fill('');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => net.count('elevation')).toBe(elevations + 1);
+  await expect.poll(() => net.count('forecast')).toBe(forecasts2 + 1);
+  expect(net.log.forecast[net.log.forecast.length - 1]).toMatch(/[?&]elevation=417(&|$)/);
+  expect((await storedPlaces(page))[0]).toMatchObject({ elev: 417, elevAuto: true });
+  await expect(page.locator('#settingsElevVal')).toHaveText(deText('setupElev', { m: 417 }));
+  await expect(page.locator('#settingsElevAuto')).toBeVisible();
+  await expect(page.locator('#settingsElevInput')).toHaveValue('417');
+
+  // ungültig wird nicht gespeichert und nicht abgerufen: der Satz steht in der Alert-Zeile unter dem Feld
+  const forecasts3 = net.count('forecast');
+  await page.locator('#settingsElevInput').fill('99999');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#settingsElevErr')).toContainText(deText('errElevRange'));
+  await expect(page.locator('#settingsElevInput')).toHaveAttribute('aria-invalid', 'true');
+  expect((await storedPlaces(page))[0]).toMatchObject({ elev: 417, elevAuto: true });
+  expect(net.count('forecast'), 'kein Abruf bei ungültiger Höhe').toBe(forecasts3);
+
+  // „Zurück“ (unten) → Hauptbildschirm, der Fokus liegt auf dem Knopf, der die Einstellungen geöffnet hat
+  await page.locator('#btnSettingsBack2').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#s-settings')).toBeHidden();
+  await expect(page.locator('#settingsBtn')).toBeFocused();
+  expect(await firstStartMinutes(page)).toBeLessThan(radiatorStart - 59);
+
+  // und oben
+  await openSettings(page);
+  await page.locator('#btnSettingsBack').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#settingsBtn')).toBeFocused();
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 12: Stepper in halben Schritten, Grenzen, leadMin ≤ leadMax, Nachtspeicher ohne Aufheizzeiten', async ({ page }) => {
+  await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+  await openSettings(page);
+
+  // Heizkörper: 20 °C, Aufheizzeit 0,5 bis 2 h; alle Zahlen mit Einheit
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '20' }));
+  await expect(page.locator('#leadMinOut')).toHaveText(deText('unitHours', { n: '0,5' }));
+  await expect(page.locator('#leadMaxOut')).toHaveText(deText('unitHours', { n: '2' }));
+  await expect(page.locator('#comfortUp')).toHaveAttribute('aria-label', deText('stepUp', { what: deText('settingsComfort') }));
+  await expect(page.locator('#leadMinDown')).toHaveAttribute('aria-label', deText('stepDown', { what: deText('settingsLeadMin') }));
+
+  await page.locator('#comfortUp').click();
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '20,5' }));
+  expect((await storedPlaces(page))[0].heat.comfort).toBe(20.5);
+
+  // leadMin über leadMax: leadMax zieht mit (0,5 → 2 sind drei Schritte, der vierte schiebt beide auf 2,5)
+  for (let i = 0; i < 4; i++) { await page.locator('#leadMinUp').click(); }
+  await expect(page.locator('#leadMinOut')).toHaveText(deText('unitHours', { n: '2,5' }));
+  await expect(page.locator('#leadMaxOut')).toHaveText(deText('unitHours', { n: '2,5' }));
+  let h = (await storedPlaces(page))[0].heat;
+  expect(h).toMatchObject({ leadMin: 2.5, leadMax: 2.5 });
+  // leadMax unter leadMin: leadMin zieht mit
+  await page.locator('#leadMaxDown').click();
+  await expect(page.locator('#leadMinOut')).toHaveText(deText('unitHours', { n: '2' }));
+  await expect(page.locator('#leadMaxOut')).toHaveText(deText('unitHours', { n: '2' }));
+  h = (await storedPlaces(page))[0].heat;
+  expect(h.leadMin).toBeLessThanOrEqual(h.leadMax);
+
+  // Raumtemperatur bleibt in 17 bis 23 °C: am Rand ist der Knopf aria-disabled (nie disabled) und tut nichts.
+  // Playwright wartet bei aria-disabled auf „enabled“, der Druck am Rand geht deshalb mit force.
+  for (let i = 0; i < 7; i++) { await page.locator('#comfortDown').click(); }
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '17' }));
+  await expect(page.locator('#comfortDown')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('#comfortDown')).not.toHaveAttribute('disabled', /.*/);
+  await page.locator('#comfortDown').click({ force: true });
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '17' }));
+  expect((await storedPlaces(page))[0].heat.comfort).toBe(17);
+  for (let i = 0; i < 12; i++) { await page.locator('#comfortUp').click(); }
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '23' }));
+  await expect(page.locator('#comfortUp')).toHaveAttribute('aria-disabled', 'true');
+  await page.locator('#comfortUp').click({ force: true });
+  expect((await storedPlaces(page))[0].heat.comfort).toBe(23);
+
+  // Nachtspeicher: beide Aufheizzeiten entfallen, der Fahrplan heißt „Aufladung“, die Raumtemperatur bleibt
+  await page.locator('#rs-storage').click();
+  await expect(page.locator('#stepLeadMin')).toBeHidden();
+  await expect(page.locator('#stepLeadMax')).toBeHidden();
+  await expect(page.locator('#stepComfort')).toBeVisible();
+  await expect(page.locator('#planHead')).toHaveText(deText('planTitleStorage'));
+  h = (await storedPlaces(page))[0].heat;
+  expect(h).toMatchObject({ type: 'storage', leadMin: null, leadMax: null, confirmed: true, comfort: 23 });
+
+  // zurück zum Heizkörper: die Tabellenwerte kommen wieder, die Raumtemperatur bleibt
+  await page.locator('#rs-radiator').click();
+  await expect(page.locator('#stepLeadMin')).toBeVisible();
+  await expect(page.locator('#leadMinOut')).toHaveText(deText('unitHours', { n: '0,5' }));
+  await expect(page.locator('#leadMaxOut')).toHaveText(deText('unitHours', { n: '2' }));
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '23' }));
+
+  // nach dem Neuladen stehen die Werte in den Einstellungen wie gespeichert
+  await page.reload();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  await openSettings(page);
+  await expect(page.locator('#comfortOut')).toHaveText(deText('unitCelsius', { n: '23' }));
+  await expect(page.locator('#rs-radiator')).toBeChecked();
+});
+
+test('Fall 12: Ortsliste mit Name, Radio und Löschen mit Rückfrage; der einzige Ort führt nach S1', async ({ page }) => {
+  await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+  const place = (await storedPlaces(page))[0];
+  await openSettings(page);
+
+  // genau ein Ort: Name als Textfeld mit sichtbarer Beschriftung, Radio „Diesen Ort anzeigen“ gewählt
+  const items = page.locator('#settingsPlaceList > li');
+  await expect(items).toHaveCount(1);
+  const name = items.first().locator('input[type=text]');
+  await expect(name).toHaveValue(place.label);
+  await expect(items.first().locator('label[for]')).toHaveText(deText('setupLabel'));
+  await expect(items.first().locator('input[type=radio]')).toBeChecked();
+  await expect(items.first()).toContainText(deText('settingsPlaceActive'));
+
+  // umbenennen: getrimmt, leer behält den alten Namen
+  await name.fill('  Opa  ');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await storedPlaces(page))[0].label).toBe('Opa');
+  await expect(name).toHaveValue('Opa');
+  await expect(page.locator('#settingsHeatPlace')).toHaveText('Opa');
+  await expect(items.first().locator('.choice')).toContainText('Opa');
+  await name.fill('   ');
+  await page.keyboard.press('Enter');
+  await expect(name).toHaveValue('Opa');
+  expect((await storedPlaces(page))[0].label).toBe('Opa');
+
+  // Löschen: erst die Rückfrage als zweiter Knopf (beim einzigen Ort settingsDeleteLast), keine confirm()-Box
+  let dialogs = 0;
+  page.on('dialog', (d) => { dialogs += 1; return d.dismiss(); });
+  const del = items.first().getByRole('button', { name: deText('btnDelete'), exact: true });
+  await expect(del).toHaveAttribute('aria-expanded', 'false');
+  await expect(items.first().locator('.place-confirm')).toBeHidden();
+  await del.click();
+  const ask = items.first().getByRole('button', { name: deText('settingsDeleteLast', { name: 'Opa' }), exact: true });
+  await expect(ask).toBeVisible();
+  await expect(ask).toBeFocused();
+  await expect(del).toHaveAttribute('aria-expanded', 'true');
+  // „Abbrechen“ schließt sie und gibt den Fokus an „Löschen“ zurück; es bleibt alles beim Alten
+  await items.first().getByRole('button', { name: deText('btnCancel'), exact: true }).click();
+  await expect(ask).toBeHidden();
+  await expect(del).toBeFocused();
+  expect(await storedPlaces(page)).toHaveLength(1);
+  // Escape schließt sie ebenfalls
+  await del.click();
+  await expect(ask).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(ask).toBeHidden();
+  await expect(del).toBeFocused();
+
+  // bestätigen: der Ort und sein Cache sind weg, die Einrichtung beginnt bei S1 mit dem Fokus auf der Überschrift
+  expect(await page.evaluate((id) => localStorage.getItem('hw:cache:' + id) !== null, place.id), 'Cache des Orts vorher da').toBe(true);
+  await del.click();
+  await ask.click();
+  await expect(page.locator('#s-welcome')).toBeVisible();
+  await expect(page.locator('#s-settings')).toBeHidden();
+  await expectFocusOnHeading(page, 's-welcome');
+  expect(await storedPlaces(page)).toEqual([]);
+  expect(await page.evaluate((id) => localStorage.getItem('hw:cache:' + id), place.id)).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('hw:active'))).toBeNull();
+  expect(dialogs, 'keine confirm()-Box').toBe(0);
+
+  // und von dort aus geht es wie beim ersten Mal weiter bis zu den Daten
+  await page.locator('#btnByAddress').click();
+  await fillAddress(page);
+  await page.locator('#btnSearch').click();
+  await pickFirstHit(page);
+  await page.locator('#btnConfirmYes').click();
+  await page.locator('#btnDone').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  expect(await storedPlaces(page)).toHaveLength(1);
 });

@@ -140,15 +140,22 @@ test('Felder haben eine sichtbare Beschriftung, nie nur einen Platzhalter', () =
     if (tg.attrs.type === 'radio') { continue; }
     assert.ok(labelFor.has(tg.attrs.id), '<label for="' + tg.attrs.id + '"> fehlt');
   }
-  // Radiokarten: das Eingabefeld sitzt im <label>, fünf Heizarten, eine gemeinsame Gruppe
+  // Radiokarten: das Eingabefeld sitzt im <label>, fünf Heizarten, eine gemeinsame Gruppe. S5 (Name heatType) und
+  // die Einstellungen (Name settingsHeatType, IDs rs-<Heizart>) tragen dieselben fünf Karten.
   const radios = all.filter((tg) => tg.name === 'input' && tg.attrs.type === 'radio');
-  assert.deepEqual(radios.map((tg) => tg.attrs.value), ['radiator', 'floorScreed', 'floorDry', 'heatpumpFloor', 'storage']);
+  const TYPES = ['radiator', 'floorScreed', 'floorDry', 'heatpumpFloor', 'storage'];
+  const s5 = radios.filter((tg) => tg.attrs.name === 'heatType');
+  const einst = radios.filter((tg) => tg.attrs.name === 'settingsHeatType');
+  assert.deepEqual(s5.map((tg) => tg.attrs.value), TYPES);
+  assert.deepEqual(einst.map((tg) => tg.attrs.value), TYPES);
+  assert.deepEqual(einst.map((tg) => tg.attrs.id), TYPES.map((x) => 'rs-' + x));
+  assert.equal(radios.length, s5.length + einst.length, 'jede Radiokarte gehört zu einer der zwei Gruppen');
   for (const r of radios) {
-    assert.equal(r.attrs.name, 'heatType');
     const before = html.slice(0, r.pos);
     assert.ok(before.lastIndexOf('<label class="choice">') > before.lastIndexOf('</label>'), r.attrs.id + ' steht nicht in seinem Label');
   }
   assert.match(html, /role="radiogroup" aria-labelledby="h-profile"/);
+  assert.match(html, /role="radiogroup" aria-labelledby="h-set-heat"/);
 });
 
 test('Adressfelder tragen autocomplete, inputmode und enterkeyhint aus Abschnitt 6', () => {
@@ -198,10 +205,16 @@ test('Fehlerzeilen sind leere role="alert"-Divs mit tabindex -1 und liegen über
 test('Statuszeile ist die einzige aria-live-Zeile des Hauptbildschirms; der Zähler ist polite', () => {
   assert.equal(byId.get('status').attrs['aria-live'], 'polite');
   assert.equal(byId.get('setupStep').attrs['aria-live'], 'polite');
+  // außer Zähler und Statuszeile tragen nur die drei Zahlen der Stepper in den Einstellungen eine Live-Region
+  // (<output aria-live="polite">, Abschnitt 7)
   const live = all.filter((tg) => tg.attrs['aria-live'] !== undefined).map((tg) => tg.attrs.id);
-  assert.deepEqual(live, ['setupStep', 'status']);
+  assert.deepEqual(live, ['setupStep', 'status', 'comfortOut', 'leadMinOut', 'leadMaxOut']);
   const main = tags(screenSlice('s-main')).filter((tg) => tg.attrs['aria-live'] !== undefined).map((tg) => tg.attrs.id);
   assert.deepEqual(main, ['status']);
+  for (const id of ['comfortOut', 'leadMinOut', 'leadMaxOut']) {
+    assert.equal(byId.get(id).name, 'output', id);
+    assert.equal(byId.get(id).attrs['aria-live'], 'polite', id);
+  }
 });
 
 test('CSS: Tippflächen 48 und 64 px, Fokusring bleibt, Größen in rem', () => {
@@ -759,4 +772,187 @@ test('Manifest und Kopf: Manifest-Link, theme-color, Manifest-id /heizwarte/ ab 
   assert.equal(manifest.id, '/heizwarte/', 'ab Meilenstein 2 trägt das Manifest id /heizwarte/ (BAUPLAN Abschnitt 9)');
   assert.equal(manifest.theme_color, '#111821');
   assert.equal(manifest.background_color, '#111821');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Einstellungen (BAUPLAN Abschnitt 7 und 8): Ortsliste, Heizart, Stepper, Höhe
+// ---------------------------------------------------------------------------------------------
+
+test('Einstellungen: Reihenfolge der Blöcke, h3 unter der h2, Zurück oben und unten', () => {
+  const slice = screenSlice('s-settings');
+  const folge = ['btnSettingsBack', 'data-i18n="settingsTitle"', 'id="h-set-places"', 'id="settingsPlaceList"', 'id="h-set-heat"',
+    'id="rs-radiator"', 'id="stepComfort"', 'id="stepLeadMin"', 'id="stepLeadMax"', 'id="h-set-elev"', 'id="settingsElevInput"', 'id="btnSettingsBack2"'];
+  let letzte = -1;
+  for (const f of folge) {
+    const pos = slice.indexOf(f);
+    assert.ok(pos > letzte, f + ' fehlt oder steht an der falschen Stelle');
+    letzte = pos;
+  }
+  const ebenen = tags(slice).filter((tg) => /^h[1-6]$/.test(tg.name));
+  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h3', 'h3', 'h3'], 'eine h2, darunter die Blöcke als h3');
+  assert.equal(ebenen[0].attrs.tabindex, '-1');
+  assert.deepEqual(ebenen.map((tg) => tg.attrs['data-i18n']), ['settingsTitle', 'settingsPlaces', 'settingsHeat', 'settingsElev']);
+  for (const id of ['btnSettingsBack', 'btnSettingsBack2']) {
+    assert.equal(byId.get(id).attrs['data-i18n'], 'btnBack', id);
+    assert.equal(byId.get(id).attrs.class, 'back', id);
+  }
+});
+
+test('Einstellungen: drei Stepper mit Knopf „−“, Zahl in <output aria-live="polite">, Knopf „+“ und Beschriftung', () => {
+  const felder = { comfort: 'settingsComfort', leadMin: 'settingsLeadMin', leadMax: 'settingsLeadMax' };
+  for (const [feld, schluessel] of Object.entries(felder)) {
+    const F = feld[0].toUpperCase() + feld.slice(1);
+    const label = byId.get('lbl' + F);
+    assert.equal(label.attrs['data-i18n'], schluessel);
+    const gruppe = all.find((tg) => tg.attrs.role === 'group' && tg.attrs['aria-labelledby'] === 'lbl' + F);
+    assert.ok(gruppe, 'Stepper ' + feld + ' ist eine Gruppe mit der Beschriftung');
+    for (const id of [feld + 'Down', feld + 'Up']) {
+      const b = byId.get(id);
+      assert.equal(b.name, 'button', id);
+      assert.equal(b.attrs.type, 'button', id);
+      assert.match(b.attrs.class, /\bstep-btn\b/, id);
+      assert.equal(b.attrs['data-i18n'], undefined, id + ': der Name kommt als aria-label aus stepDown/stepUp, nicht als Text');
+    }
+    // das Zeichen auf dem Knopf ist Zierde (aria-hidden), der Name steckt im aria-label, das app.js setzt
+    assert.match(html, new RegExp('id="' + feld + 'Down"><span aria-hidden="true">−</span></button>'));
+    assert.match(html, new RegExp('id="' + feld + 'Up"><span aria-hidden="true">\\+</span></button>'));
+    const out = byId.get(feld + 'Out');
+    assert.equal(out.name, 'output');
+    assert.equal(out.attrs['aria-live'], 'polite');
+    assert.equal(out.attrs.for, feld + 'Down ' + feld + 'Up');
+    // Reihenfolge im Markup: Beschriftung, −, Zahl, +
+    assert.ok(html.indexOf('id="lbl' + F + '"') < html.indexOf('id="' + feld + 'Down"') &&
+      html.indexOf('id="' + feld + 'Down"') < html.indexOf('id="' + feld + 'Out"') &&
+      html.indexOf('id="' + feld + 'Out"') < html.indexOf('id="' + feld + 'Up"'), feld);
+  }
+  // beide Aufheizzeiten sitzen in einem Kasten, den app.js bei der Heizart Nachtspeicher verbirgt
+  assert.ok(byId.has('stepLeadMin') && byId.has('stepLeadMax'));
+  const code = funktion(appCode, 'renderSteppers');
+  assert.ok(code.includes("place.heat.type === 'storage'"));
+  assert.ok(code.includes("$('stepLeadMin').hidden = noLead;") && code.includes("$('stepLeadMax').hidden = noLead;"));
+  assert.ok(code.includes("t('stepDown', { what })") && code.includes("t('stepUp', { what })"), 'aria-label aus stepDown/stepUp');
+  assert.ok(code.includes('t(spec.unit, { n: numAuto(value) })'), 'Zahl mit Einheit über den Schlüssel');
+  assert.ok(code.includes('setAriaDisabled'), 'am Rand aria-disabled, nie disabled');
+  assert.doesNotMatch(code, /\.disabled\b/);
+});
+
+test('Einstellungen: Heizart-Karten bleiben die von S5, die Wahl setzt confirmed und rechnet entprellt neu', () => {
+  const slice = screenSlice('s-settings');
+  for (const type of ['Radiator', 'FloorScreed', 'FloorDry', 'HeatpumpFloor', 'Storage']) {
+    assert.match(slice, new RegExp('data-i18n="profile' + type + '"'));
+    assert.match(slice, new RegExp('data-i18n="profileHint' + type + '"'));
+  }
+  assert.match(slice, /data-i18n="profileRule"/, 'Faustregel unter den Karten');
+  const wahl = funktion(appCode, 'onSettingsHeat');
+  assert.ok(wahl.includes('applyHeatType(place, type, true)'), 'der Wechsel setzt confirmed true');
+  assert.ok(wahl.includes('persist(\'places\', state.places)'));
+  assert.ok(wahl.includes('scheduleRecalc();'));
+  assert.ok(appCode.includes("document.querySelectorAll('input[name=\"settingsHeatType\"]')"));
+});
+
+test('Einstellungen: Stepper und Heizart rechnen nur Ampel und Fahrplan neu, 150 ms entprellt', () => {
+  assert.match(appCode, /const RECALC_MS = 150;/);
+  const neu = funktion(appCode, 'recalcVerdict');
+  assert.ok(neu.includes('renderVerdict(view)') && neu.includes('renderPlan(view)'));
+  assert.doesNotMatch(neu, /\brender\(\)|renderNow|renderDays|renderAlerts|renderHead|renderStatus/, 'nur Ampel und Fahrplan');
+  const plan = funktion(appCode, 'scheduleRecalc');
+  assert.ok(plan.includes('cancelRecalc();') && plan.includes('setTimeout(recalcVerdict, RECALC_MS)'));
+  const schritt = funktion(appCode, 'onStep');
+  assert.ok(schritt.includes('applyStep(before, field, dir)') && schritt.includes('scheduleRecalc();'));
+  assert.ok(schritt.includes("persist('places', state.places)"), 'jede Änderung wird gespeichert');
+  // die Handler hängen an allen sechs Knöpfen
+  assert.match(appCode, /on\(field \+ 'Down', 'click', \(\) => onStep\(field, -1\)\);/);
+  assert.match(appCode, /on\(field \+ 'Up', 'click', \(\) => onStep\(field, 1\)\);/);
+  assert.match(appCode, /const STEP_FIELDS = \['comfort', 'leadMin', 'leadMax'\];/);
+});
+
+test('Einstellungen: Höhe mit Anzeige, Ändern-Knopf und Feld nach den Regeln von S4, gespeichert beim change', () => {
+  const f = byId.get('settingsElevInput').attrs;
+  assert.equal(f.type, 'number');
+  assert.equal(f.inputmode, 'numeric');
+  assert.equal(f.min, '-500');
+  assert.equal(f.max, '9000');
+  assert.equal(f.step, '1');
+  const label = all.find((tg) => tg.name === 'label' && tg.attrs.for === 'settingsElevInput');
+  assert.equal(label.attrs['data-i18n'], 'setupElevLabel');
+  assert.equal(byId.get('settingsElevHint').attrs['data-i18n'], 'setupElevHint');
+  assert.equal(byId.get('settingsElevAuto').attrs['data-i18n'], 'setupElevAuto');
+  assert.equal(byId.get('settingsElevAuto').attrs.hidden, '');
+  const knopf = byId.get('btnSettingsElev');
+  assert.equal(knopf.attrs['data-i18n'], 'btnChange');
+  assert.equal(knopf.attrs['aria-expanded'], 'false');
+  assert.equal(knopf.attrs['aria-controls'], 'settingsElevEdit');
+  assert.equal(byId.get('settingsElevEdit').attrs.hidden, '', 'das Feld ist erst nach „Ändern“ da');
+  const err = byId.get('settingsElevErr');
+  assert.equal(err.attrs.role, 'alert');
+  assert.match(html, /id="settingsElevErr"[^>]*><\/div>/, 'die Fehlerzeile ist leer');
+
+  const code = funktion(appCode, 'onElevCommit');
+  assert.ok(code.includes('parseElev(input.value,'), 'dieselbe Regel wie S4');
+  assert.ok(code.includes('geo.elevation(place.lat, place.lon)'), 'leer fragt mit den gerundeten Koordinaten des Orts neu');
+  assert.ok(code.includes('elevPatch(parsed, auto)'));
+  assert.ok(code.includes("persist('places', state.places)"));
+  assert.ok(code.includes('refresh(true)'), 'danach sofort neu abrufen: die Höhe steckt in der Forecast-URL');
+  assert.ok(code.includes("t('errElevRange')"), 'ungültig nennt den Satz aus S4');
+  assert.match(appCode, /on\('settingsElevInput', 'change', onElevCommit\);/);
+  assert.match(appCode, /on\('btnSettingsElev', 'click', \(\) => openSettingsElev\(\$\('settingsElevEdit'\)\.hidden\)\);/);
+  // Anzeige: setupElev, setupElevAuto nur solange automatisch, setupElevUnknown ohne Höhe
+  const anzeige = funktion(appCode, 'renderSettingsElev');
+  assert.ok(anzeige.includes("t('setupElev', {") && anzeige.includes("t('setupElevUnknown')"));
+  assert.ok(anzeige.includes('known && place.elevAuto'));
+});
+
+test('Einstellungen: Löschen mit Rückfrage als zweiter Knopf, ohne confirm(); der letzte Ort führt zu S1', () => {
+  assert.doesNotMatch(appCode, /\bconfirm\s*\(|\balert\s*\(|\bprompt\s*\(/, 'keine Browser-Dialoge');
+  const item = funktion(appCode, 'placeItem');
+  assert.ok(item.includes("t('btnDelete')") && item.includes("t('btnCancel')"));
+  assert.ok(item.includes("t('settingsDeleteLast', { name: p.label })") && item.includes("t('settingsDeleteConfirm', { name: p.label })"));
+  assert.ok(item.includes("t('settingsPlaceActive')") && item.includes("t('setupLabel')"));
+  assert.ok(item.includes("delBtn.setAttribute('aria-expanded'") && item.includes("delBtn.setAttribute('aria-controls', box.id)"));
+  assert.ok(item.includes('input.maxLength = LABEL_MAX') && item.includes("input.type = 'text'") && item.includes('label.htmlFor = nameId'),
+    'Name als Textfeld mit sichtbarer Beschriftung, höchstens 40 Zeichen');
+  assert.ok(item.includes("radio.type = 'radio'") && item.includes("radio.name = 'settingsPlace'"));
+  assert.ok(item.includes("e.key === 'Escape'"), 'Escape schließt die Rückfrage');
+  assert.ok(item.includes('box.hidden = true;'), 'die Rückfrage ist erst nach dem Druck auf „Löschen“ da');
+  const weg = funktion(appCode, 'deletePlace');
+  assert.ok(weg.includes('afterDelete(state.places, id, state.activeId)'));
+  assert.ok(weg.includes("forget('cache:' + id)"), 'der Cache des Orts geht mit');
+  assert.ok(weg.includes('state.places.length === 0') && weg.includes('showSetup();'), 'der letzte Ort: Einrichtung bei S1');
+  assert.ok(weg.includes('activatePlace(next.activeId)'), 'wer nachrückt, wird wie beim Umschalten aktiv');
+  assert.ok(weg.includes('.focus()'), 'der Fokus fällt nie auf body');
+  // der Name ändert sich beim change und bleibt in der Rückfrage aktuell
+  assert.ok(item.includes("input.addEventListener('change'") && item.includes('yes.textContent = question()'));
+});
+
+test('Einstellungen: Öffnen setzt den Fokus auf die h2, beide Zurück führen auf #settingsBtn', () => {
+  assert.match(appCode, /on\('btnSettingsBack', 'click', onSettingsBack\);/);
+  assert.match(appCode, /on\('btnSettingsBack2', 'click', onSettingsBack\);/);
+  const zurueck = funktion(appCode, 'onSettingsBack');
+  assert.ok(zurueck.includes('showMain();') && zurueck.includes("$('settingsBtn').focus();"));
+  const auf = funktion(appCode, 'onSettingsOpen');
+  assert.ok(auf.includes("showScreen('s-settings')"), 'showScreen setzt den Fokus auf die erste h2 des Bildschirms');
+  assert.ok(auf.includes('renderSettings();'));
+  // die Texte der Liste ziehen beim Sprachwechsel nach
+  assert.match(funktion(appCode, 'onLanguage'), /if \(state\.screen === 's-settings'\) \{ renderSettings\(\); \}/);
+});
+
+test('Einstellungen: jede ID der Stepper steht im Markup, alle Schlüssel der Stepper in de', () => {
+  for (const feld of ['comfort', 'leadMin', 'leadMax']) {
+    for (const id of [feld + 'Down', feld + 'Up', feld + 'Out']) { assert.ok(byId.has(id), '#' + id); }
+  }
+  for (const k of ['unitHours', 'unitCelsius', 'stepDown', 'stepUp', 'settingsDeleteConfirm', 'settingsDeleteLast', 'btnCancel',
+    'settingsPlaceActive', 'settingsPlaces', 'settingsHeat', 'settingsElev', 'errElevRange']) {
+    assert.ok(has(de, k), k + ' fehlt in de');
+  }
+  assert.match(de.unitHours, /^\{n\} h$/);
+  assert.match(de.unitCelsius, /^\{n\} °C$/);
+});
+
+test('Einstellungen: CSS mit 48-px-Knöpfen am Stepper, Zahl in der Mitte, Löschen mit eigenem Rand', () => {
+  assert.match(css, /\.step-btn\s*\{[^}]*min-width: 48px;[^}]*min-height: 48px;/);
+  assert.match(css, /\.stepper\s*\{[^}]*display: flex;[^}]*align-items: center;/);
+  assert.match(css, /\.stepper output\s*\{[^}]*text-align: center;/);
+  assert.match(css, /\.step-btn\[aria-disabled="true"\]\s*\{[^}]*cursor: default;/);
+  assert.match(css, /button\.danger\s*\{[^}]*border-color: var\(--crit\);/);
+  assert.match(css, /\.place-item\s*\{[^}]*background: var\(--surface\);/);
 });
