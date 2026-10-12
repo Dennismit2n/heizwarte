@@ -18,28 +18,161 @@
 <div class="wrap">
   <header>
     <h1 data-i18n="appName">Heizwarte</h1>
+    <div class="notes">
+      <p id="noteBlocked" data-i18n="storageBlocked" hidden></p>
+      <p id="noteFull" data-i18n="storageFull" hidden></p>
+      <p id="noteNewer" data-i18n="storeNewer" hidden></p>
+    </div>
+    <p id="setupStep" class="step" aria-live="polite"></p>
   </header>
   <main>
     <section class="screen" id="s-welcome" hidden>
       <h2 tabindex="-1" data-i18n="appClaim"></h2>
+      <p data-i18n="setupIntro"></p>
+      <p class="hint" data-i18n="setupPrivacy"></p>
+      <div class="err" id="err-welcome" role="alert" tabindex="-1"></div>
+      <div class="err-actions" id="act-welcome">
+        <button type="button" id="btnWelcomeRetry" data-act="retry" data-i18n="btnRetry" hidden></button>
+        <button type="button" id="btnWelcomeNext" data-act="next" data-i18n="btnNext" hidden></button>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" id="btnByAddress" data-i18n="setupByAddress"></button>
+        <button type="button" id="btnByLocation" data-i18n="setupByLocation" hidden></button>
+      </div>
     </section>
+
     <section class="screen" id="s-address" hidden>
+      <button type="button" class="back" id="btnAddrBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="setupAddressTitle"></h2>
+      <p class="hint" id="geoWrong" data-i18n="setupGeoWrong" hidden></p>
+      <form id="addrForm" novalidate>
+        <div class="field">
+          <label for="f-street" data-i18n="setupStreet"></label>
+          <input type="text" id="f-street" name="street" autocomplete="street-address" enterkeyhint="next" autocapitalize="words" spellcheck="false" aria-describedby="h-street">
+          <p class="hint" id="h-street" data-i18n="setupStreetHint"></p>
+        </div>
+        <div class="field">
+          <label for="f-zip" data-i18n="setupZip"></label>
+          <input type="text" id="f-zip" name="zip" inputmode="text" autocomplete="postal-code" enterkeyhint="next" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="f-city" data-i18n="setupCity"></label>
+          <input type="text" id="f-city" name="city" autocomplete="address-level2" enterkeyhint="search" autocapitalize="words" spellcheck="false">
+        </div>
+        <div class="err" id="err-address" role="alert" tabindex="-1"></div>
+        <div class="err-actions" id="act-address">
+          <button type="button" id="btnCityOnly" data-act="cityOnly" data-i18n="btnCityOnly" hidden></button>
+          <button type="button" id="btnAddrRetry" data-act="retry" data-i18n="btnRetry" hidden></button>
+          <button type="button" id="btnAddrLocation" data-act="location" data-i18n="setupByLocation" hidden></button>
+        </div>
+        <div class="actions">
+          <button type="submit" class="primary" id="btnSearch" data-i18n="setupSearch"></button>
+        </div>
+      </form>
     </section>
+
     <section class="screen" id="s-hits" hidden>
+      <button type="button" class="back" id="btnHitsBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="setupHitsTitle"></h2>
+      <p class="hint" data-i18n="setupHitsHint"></p>
+      <ul class="hits" id="hitList"></ul>
+      <button type="button" class="plain" id="btnNoneFits" data-i18n="setupNoneFits"></button>
     </section>
+
     <section class="screen" id="s-confirm" hidden>
       <h2 tabindex="-1" data-i18n="setupConfirmTitle"></h2>
+      <div class="card">
+        <p class="card-title" id="c-label"></p>
+        <p id="c-line2"></p>
+        <p id="c-region"></p>
+        <p id="c-extent"></p>
+        <p class="hint" id="c-coords"></p>
+        <p id="c-nonumber" data-i18n="setupNoNumber" hidden></p>
+      </div>
+      <div class="elev">
+        <p id="c-elev"><span id="c-elevVal"></span> <span id="c-elevAuto" class="hint" data-i18n="setupElevAuto" hidden></span></p>
+        <button type="button" id="btnElevChange" data-i18n="btnChange" aria-expanded="false" aria-controls="elevEdit"></button>
+        <div class="field" id="elevEdit" hidden>
+          <label for="f-elev" data-i18n="setupElevLabel"></label>
+          <input type="number" id="f-elev" inputmode="numeric" min="-500" max="9000" step="1" aria-describedby="h-elev">
+          <p class="hint" id="h-elev" data-i18n="setupElevHint"></p>
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-label" data-i18n="setupLabel"></label>
+        <input type="text" id="f-label" maxlength="40" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="err" id="err-confirm" role="alert" tabindex="-1"></div>
+      <div class="actions">
+        <button type="button" class="primary" id="btnConfirmYes" data-i18n="setupConfirmYes"></button>
+        <button type="button" id="btnConfirmNo" data-i18n="setupConfirmNo"></button>
+      </div>
     </section>
+
     <section class="screen" id="s-profile" hidden>
-      <h2 tabindex="-1" data-i18n="setupHeatTitle"></h2>
+      <h2 tabindex="-1" id="h-profile" data-i18n="setupHeatTitle"></h2>
+      <p class="hint" data-i18n="setupHeatHint"></p>
+      <div class="choices" role="radiogroup" aria-labelledby="h-profile">
+        <label class="choice">
+          <input type="radio" name="heatType" id="r-radiator" value="radiator">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="choice-body">
+            <span class="choice-title" data-i18n="profileRadiator"></span>
+            <span class="choice-hint" data-i18n="profileHintRadiator"></span>
+          </span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="heatType" id="r-floorScreed" value="floorScreed">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="choice-body">
+            <span class="choice-title" data-i18n="profileFloorScreed"></span>
+            <span class="choice-hint" data-i18n="profileHintFloorScreed"></span>
+          </span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="heatType" id="r-floorDry" value="floorDry">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="choice-body">
+            <span class="choice-title" data-i18n="profileFloorDry"></span>
+            <span class="choice-hint" data-i18n="profileHintFloorDry"></span>
+          </span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="heatType" id="r-heatpumpFloor" value="heatpumpFloor">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="choice-body">
+            <span class="choice-title" data-i18n="profileHeatpumpFloor"></span>
+            <span class="choice-hint" data-i18n="profileHintHeatpumpFloor"></span>
+          </span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="heatType" id="r-storage" value="storage">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="choice-body">
+            <span class="choice-title" data-i18n="profileStorage"></span>
+            <span class="choice-hint" data-i18n="profileHintStorage"></span>
+          </span>
+        </label>
+      </div>
+      <p class="hint" data-i18n="profileRule"></p>
+      <div class="actions">
+        <button type="button" class="primary" id="btnDone" data-i18n="btnDone"></button>
+        <button type="button" id="btnDontKnow" data-i18n="setupHeatDontKnow"></button>
+      </div>
     </section>
+
     <section class="screen" id="s-main" hidden>
+      <p class="place-name" id="placeName"></p>
+      <div class="notice" id="heatHint" hidden>
+        <p data-i18n="setupHeatDefaultHint"></p>
+        <button type="button" id="btnHeatChange" data-i18n="btnChange"></button>
+      </div>
+      <p id="status" aria-live="polite"></p>
       <section id="now">
         <h2 tabindex="-1" data-i18n="nowTitle"></h2>
       </section>
     </section>
+
     <section class="screen" id="s-settings" hidden>
       <h2 tabindex="-1" data-i18n="settingsTitle"></h2>
     </section>

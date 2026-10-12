@@ -79,7 +79,7 @@
       setupConfirmYes: 'Ja, das stimmt',
       setupConfirmNo: 'Nein, zurück',
       setupRegion: 'Das liegt in: {region}.',
-      // {w} und {h} liefert die App fertig mit Einheit: „22 × 28 m“ bei einem Haus, „2,1 × 1,4 km“ bei einem Ortsteil
+      // {w} ist die Zahl, {h} die Zahl mit Einheit, damit „22 × 28 m“ bei einem Haus und „2,1 × 1,4 km“ bei einem Ortsteil entsteht
       setupExtent: 'Umriss etwa {w} × {h}',
       setupCoords: '{lat} / {lon} · auf etwa 100 m gerundet',
       setupElev: 'Höhe: {m} m',
@@ -110,6 +110,7 @@
       errGeoDenied: 'Dein Handy hat den Standort nicht freigegeben. Du kannst die Adresse auch eintippen.',
       errGeoFailed: 'Der Standort kam nicht an.',
       errElev: 'Die Höhe konnte nicht ermittelt werden. Du kannst sie selbst eintragen.',
+      errElevRange: 'Die Höhe passt nicht. Trage eine Zahl von −500 bis 9000 Metern ein oder lass das Feld leer.',
       errMaxPlaces: 'Fünf Orte sind das Maximum. Lösche erst einen Ort.',
       errTooOld: 'Die Wetterdaten sind zu alt für eine Empfehlung. Tippe auf Neu laden.',
       errLoadFailed: '⚠ Veraltet – der Wetterdienst hat nicht geantwortet. Tippe auf Neu laden.',
