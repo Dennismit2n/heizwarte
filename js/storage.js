@@ -4,7 +4,8 @@
  * Alle Werte liegen als JSON im Speicher (auch Texte wie hw:lang oder hw:theme). Kein Zugriff wirft nach
  * außen: get() liefert den Rückfallwert, set() liefert false, remove() schweigt. Fällt der Speicher aus,
  * läuft die App mit einer Map im Arbeitsspeicher weiter, und degraded sagt der Oberfläche warum:
- *   'blocked'  der Zugriff selbst ist gesperrt oder wirft (Site-Daten aus, Sandbox, privates Fenster)
+ *   'blocked'  der Zugriff selbst ist gesperrt oder wirft (Site-Daten aus, Sandbox, privates Fenster),
+ *              oder setItem wirft ohne Quota-Bezug; dann bleibt das Backend lesbar (schreibgeschützt)
  *   'full'     setItem scheitert an der Quota, auch nach dem Opfern fremder Wetter-Caches
  *   null       alles gut
  * Schlüsselübersicht und Typen: BAUPLAN Abschnitt 4, Schnittstelle: Abschnitt 5 (storage).
@@ -24,9 +25,11 @@
   // beim require.
   let backend = null;     // echtes Backend { getItem, setItem, removeItem } oder null (= noch nicht aufgelöst)
   let blocked = false;    // true: das Backend wird nicht mehr benutzt, alles liegt in mem
+  let readOnly = false;   // true: setItem warf ohne Quota-Bezug; gelesen wird weiter, geschrieben nur nach mem
   let full = false;       // true: mindestens ein Wert passte auch nach dem Opfern nicht mehr hinein
   // Rohe Strings unter dem vollen Schlüssel (mit hw:). Im Modus 'blocked' ist das der ganze Speicher,
-  // sonst nur das, was nicht ins Backend passte. Beim Lesen gewinnt mem vor dem Backend.
+  // sonst nur das, was nicht ins Backend passte oder (schreibgeschützt) nicht hinein durfte. Beim Lesen
+  // gewinnt mem vor dem Backend; der Wert null steht für einen in dieser Sitzung gelöschten Schlüssel.
   const mem = new Map();
 
   // ---------------------------------------------------------------------------------------------
@@ -124,7 +127,7 @@
   // Schreibt einen rohen String. true = steht im Backend, false = nur im Arbeitsspeicher dieser Sitzung.
   function write(fullKey, raw) {
     const be = resolve();
-    if (!be) {
+    if (!be || readOnly) {
       mem.set(fullKey, raw);
       return false;
     }
@@ -134,8 +137,10 @@
       return true;
     } catch (e) {
       if (!isQuota(e)) {
-        // kein Platzproblem, sondern gesperrt: Backend abschalten, Wert bleibt in dieser Sitzung
-        goBlocked();
+        // kein Platzproblem, sondern gesperrt: ab jetzt schreibgeschützt. Das Backend bleibt lesbar, damit ein
+        // einzelner Fehler mitten in der Sitzung nicht alle gespeicherten Orte unsichtbar macht; der Wert
+        // bleibt in dieser Sitzung. Ganz abgeschaltet wird nur, wenn schon das Lesen wirft.
+        readOnly = true;
         mem.set(fullKey, raw);
         return false;
       }
@@ -161,6 +166,7 @@
   function use(b) {
     backend = b || null;
     blocked = false;
+    readOnly = false;
     full = false;
     mem.clear();
   }
@@ -189,29 +195,34 @@
     }
   }
 
-  // Entfernt hw:<key> aus dem Backend und aus dem Arbeitsspeicher. Wirft nie.
+  // Entfernt hw:<key> aus dem Backend und aus dem Arbeitsspeicher. Wirft nie. Schreibgeschützt (oder wenn
+  // removeItem wirft) bleibt der Wert im Backend stehen; ein Grabstein (null) in mem verdeckt ihn für diese
+  // Sitzung, damit get() danach den Rückfallwert liefert.
   function remove(key) {
     const fullKey = PREFIX + key;
     mem.delete(fullKey);
     const be = resolve();
     if (!be) { return; }
+    if (readOnly) {
+      mem.set(fullKey, null);
+      return;
+    }
     try {
       be.removeItem(fullKey);
     } catch (e) {
-      goBlocked();
+      readOnly = true;
+      mem.set(fullKey, null);
     }
   }
 
   // 8 Hex-Zeichen aus crypto.getRandomValues, nie aus dem Namen (BAUPLAN Abschnitt 4, Place.id).
-  // Math.random ist nur der Notbehelf für Umgebungen ohne crypto; die Id ist ein Etikett, kein Geheimnis.
+  // Ohne crypto wirft newId(); migrate() fängt das (die alten Schlüssel bleiben für den nächsten Start).
+  // Jeder Browser mit localStorage hat crypto.getRandomValues, Node ab 19 ebenso.
   function newId() {
     const bytes = new Uint8Array(4);
     const c = root.crypto;
-    if (c && typeof c.getRandomValues === 'function') {
-      c.getRandomValues(bytes);
-    } else {
-      for (let i = 0; i < bytes.length; i++) { bytes[i] = Math.floor(Math.random() * 256); }
-    }
+    if (!c || typeof c.getRandomValues !== 'function') { throw new Error('crypto.getRandomValues fehlt'); }
+    c.getRandomValues(bytes);
     let id = '';
     for (let i = 0; i < bytes.length; i++) { id += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16); }
     return id;
@@ -278,8 +289,9 @@
       const places = get('places');
       const hasPlaces = Array.isArray(places);
 
-      // Fall 2: frische Installation
-      if (!legacy && !hasPlaces) {
+      // Fall 2: frische Installation, auch eine abgebrochene (hw:places [] steht, hw:v fehlt noch). Ein
+      // leeres [] zu überschreiben ist harmlos; nur eine nicht leere Ortsliste gilt als Wiederaufnahme von Fall 3.
+      if (!legacy && !(hasPlaces && places.length > 0)) {
         set('places', []);
         set('v', VERSION);
         return result;
@@ -303,7 +315,9 @@
       }
       return result;
     } catch (e) {
-      return result;
+      // nicht zu Ende gekommen (zum Beispiel ohne crypto keine Id): nichts übernommen, der nächste Start
+      // versucht es noch einmal
+      return { from: null, created: null };
     }
   }
 
@@ -313,7 +327,7 @@
     enumerable: true,
     get() {
       resolve();
-      if (blocked) { return 'blocked'; }
+      if (blocked || readOnly) { return 'blocked'; }
       return full ? 'full' : null;
     }
   });

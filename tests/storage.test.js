@@ -291,6 +291,33 @@ test('Migration nach Abbruch mitten in Fall 3: vorhandene Orte bleiben, kein zwe
   assert.equal(b.getItem('hw:v'), '2');
 });
 
+test('Migration nach Abbruch mitten in Fall 2: hw:places [] ohne hw:v ist eine frische Installation, nicht Bürg', () => {
+  const be = neu({ 'hw:places': [] });
+  assert.deepEqual(storage.migrate(FEST), { from: null, created: null });
+  assert.deepEqual(inhalt(be), { 'hw:places': '[]', 'hw:v': '2' });
+  assert.deepEqual(storage.migrate(FEST), { from: 2, created: null });
+});
+
+test('Migration Fall 3 ohne crypto: kein Wurf, keine Id aus Math.random, der nächste Start versucht es wieder', () => {
+  const echt = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const be = neu(V1);
+  const vorher = inhalt(be);
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+  let r;
+  try {
+    r = storage.migrate({ nowMs: FEST.nowMs });
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', echt);
+  }
+  assert.deepEqual(r, { from: null, created: null });
+  assert.deepEqual(inhalt(be), vorher, 'die Bürg-Schlüssel bleiben, hw:v fehlt weiter');
+
+  // mit crypto klappt es beim nächsten Start
+  const r2 = storage.migrate({ nowMs: FEST.nowMs });
+  assert.equal(r2.from, 1);
+  assert.match(r2.created.id, /^[0-9a-f]{8}$/);
+});
+
 // ---------------------------------------------------------------------------------------------
 // Fall 6: Speicher gesperrt oder voll
 // ---------------------------------------------------------------------------------------------
@@ -355,6 +382,51 @@ test('Backend wirft bei setItem ohne Quota-Fehler: false, Wert bleibt in der Sit
   assert.equal(storage.degraded, 'blocked');
   assert.deepEqual(storage.get('neu'), { a: 1 });
   assert.equal(be.getItem('hw:neu'), null);
+  // das Backend bleibt lesbar: der alte Wert ist weiter da
+  assert.equal(storage.get('alt'), 1);
+});
+
+test('ein einzelner Schreibfehler mitten in der Sitzung macht die gespeicherten Orte nicht unlesbar', () => {
+  const ort = { id: 'p0p0p0p0', label: 'Mama' };
+  const opt = {};
+  const be = neu({ 'hw:v': 2, 'hw:places': [ort], 'hw:active': j('p0p0p0p0'), 'hw:lang': j('de') }, opt);
+  assert.equal(storage.set('more', true), true);
+  assert.equal(storage.degraded, null);
+
+  // ab jetzt wirft setItem einen SecurityError (zum Beispiel Site-Daten mitten in der Sitzung gesperrt)
+  opt.throwOnSet = true;
+  assert.equal(storage.set('cache:p0p0p0p0', { v: 2 }), false);
+  assert.equal(storage.degraded, 'blocked');
+  assert.deepEqual(storage.get('places'), [ort], 'die Orte stehen weiter im Backend und bleiben lesbar');
+  assert.equal(storage.get('active'), 'p0p0p0p0');
+  assert.equal(storage.get('more'), true);
+  assert.deepEqual(storage.get('cache:p0p0p0p0'), { v: 2 }, 'der neue Wert lebt in der Sitzung');
+
+  // schreibgeschützt: auch Schreiben ohne Fehler geht nur noch in den Arbeitsspeicher, Löschen verdeckt nur
+  opt.throwOnSet = false;
+  assert.equal(storage.set('lang', 'fr'), false);
+  assert.equal(storage.get('lang'), 'fr');
+  assert.equal(be.getItem('hw:lang'), j('de'));
+  storage.remove('more');
+  assert.equal(storage.get('more', 'weg'), 'weg');
+  assert.equal(be.getItem('hw:more'), 'true', 'das Backend bleibt unangetastet');
+  assert.equal(storage.migrate(FEST).from, 2);
+});
+
+test('removeItem wirft: der Schlüssel ist in der Sitzung weg, alles andere bleibt lesbar', () => {
+  const inner = fakeStorage({ 'hw:v': 2, 'hw:a': 1, 'hw:b': 2 });
+  storage.use({
+    getItem: (k) => inner.getItem(k),
+    setItem: (k, v) => inner.setItem(k, v),
+    removeItem: () => { const e = new Error('gesperrt'); e.name = 'SecurityError'; throw e; }
+  });
+  storage.remove('a');
+  assert.equal(storage.get('a', 'weg'), 'weg');
+  assert.equal(storage.get('b'), 2);
+  assert.equal(storage.degraded, 'blocked');
+  assert.equal(inner.getItem('hw:a'), '1');
+  assert.equal(storage.set('c', 3), false, 'danach schreibgeschützt');
+  assert.equal(storage.get('c'), 3);
 });
 
 test('Standard-Backend: wirft schon der Zugriff auf localStorage, bleibt alles im Arbeitsspeicher', () => {

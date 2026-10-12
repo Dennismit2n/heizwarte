@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
+const { fakeFetch } = require('./_fake.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
 
@@ -303,6 +304,38 @@ test('alertMatches: englischer Name allein genügt, die deutsche Liste kennt BÖ
   assert.equal(heat.alertMatches([{ event_de: 'HITZE', event_en: 'heat', severity: 'severe' }]).level, 0);
 });
 
+test('alertMatches: Gewitter ist kein Heiz-Alarm, außer der deutsche Name nennt ORKAN oder STURM (wie Bürg)', () => {
+  // Review Runde 1: „storm“ traf mitten in „thunderstorm“
+  for (const en of ['thunderstorm', 'strong thunderstorm', 'severe thunderstorm with hail', 'extreme thunderstorm']) {
+    assert.ok(!heat.ALERT_RX_EN.test(en), en);
+  }
+  for (const en of ['storm-force gusts', 'severe storm-force gusts', 'gale-force gusts', 'near gale', 'black ice', 'Storm', 'ice']) {
+    assert.ok(heat.ALERT_RX_EN.test(en), en);
+  }
+  assert.ok(!heat.ALERT_RX_EN.test('notice'), 'ice nur als ganzes Wort');
+
+  assert.deepEqual(heat.alertMatches([{ event_de: 'STARKES GEWITTER', event_en: 'strong thunderstorm', severity: 'moderate' }]),
+    { level: 0, hits: [] });
+  assert.deepEqual(heat.alertMatches([{ event_de: 'GEWITTER', event_en: 'thunderstorm', severity: 'minor' }]),
+    { level: 0, hits: [] });
+  assert.equal(heat.alertMatches([{ event_de: 'SCHWERES GEWITTER mit HAGEL', event_en: 'severe thunderstorm with hail', severity: 'severe' }]).level, 0);
+  assert.equal(heat.alertMatches([{ event_de: null, event_en: 'thunderstorm', severity: 'severe' }]).level, 0);
+
+  // ORKANBÖEN trifft über die deutsche Liste, auch wenn der englische Name nichts trifft
+  const orkan = { event_de: 'SCHWERES GEWITTER mit ORKANBÖEN', event_en: 'severe thunderstorm with hurricane-force gusts', severity: 'severe' };
+  assert.ok(heat.ALERT_RX_DE.test(orkan.event_de));
+  assert.ok(!heat.ALERT_RX_EN.test(orkan.event_en));
+  assert.deepEqual(heat.alertMatches([orkan]), { level: 3, hits: [orkan] });
+  assert.equal(heat.alertMatches([Object.assign({}, orkan, { severity: 'moderate' })]).level, 2);
+
+  // in der Ampel: ein Gewitter an einem milden Tag lässt Stufe 0 stehen
+  const gewitter = [{ event_de: 'STARKES GEWITTER', event_en: 'strong thunderstorm', severity: 'severe' }];
+  const v = verdictOf('om-buerg-2026-10-09.json', BUERG_NOW_MS, BERLIN, PROF.floorScreed, gewitter);
+  assert.equal(v.level, 0);
+  assert.ok(!v.reasons.some((r) => r.key === 'alert'));
+  assert.deepEqual(v.al, []);
+});
+
 test('alertMatches: Felder null oder fehlend werfen nicht', () => {
   const ohne = [
     { event_de: null, event_en: null, severity: null, expires: null },
@@ -493,6 +526,53 @@ test('om-dst: kein Versatz der Startzeiten, die Vorgängernacht mit 17 Werten ge
   assert.equal(vorUm.nights[0].hs.length, 17);
   assert.equal(vorUm.plan[0].startMs % HOUR, 0);
   assert.equal(vorUm.plan[0].onsetMs - vorUm.plan[0].startMs, Math.ceil(vorUm.plan[0].lead) * HOUR);
+});
+
+// Antwort über der Frühjahrsumstellung, abgerufen VOR der Umstellung: fester Offset +3600 s für die ganze
+// Antwort (KT §5.1), 120 Stundenwerte ab 27.03.2026 00:00 MEZ. Der letzte Wert fällt auf 01.04. 00:00 MESZ
+// und bildet einen Rumpftag aus einer Stunde. Alle Stunden 10 °C, nur die Rumpfstunde rumpfTemp.
+function omFruehling(rumpfTemp) {
+  const start = Date.UTC(2026, 2, 26, 23, 0) / 1000;
+  const time = [];
+  const temp = [];
+  for (let i = 0; i < 120; i++) {
+    time.push(start + i * 3600);
+    temp.push(i === 119 ? rumpfTemp : 10);
+  }
+  return {
+    latitude: 48.88, longitude: 9.44, utc_offset_seconds: 3600, timezone: 'Europe/Berlin', timezone_abbreviation: 'GMT+1',
+    hourly: { time, temperature_2m: temp },
+    daily: { time: [0, 1, 2, 3, 4].map((k) => start + k * 86400), temperature_2m_max: [12, 12, 12, 12, 12], temperature_2m_min: [8, 8, 8, 8, 8] }
+  };
+}
+
+test('Frühjahrsumstellung: der Rumpftag aus einer Stunde ist partial und bildet weder drop48 noch gtRise', () => {
+  const m = weather.model({ v: 2, fetched: 0, om: omFruehling(0), mos: [], mosStation: null, alerts: null, alertsStatus: 'none' });
+  assert.deepEqual(m.days.map((d) => d.key), ['2026-03-27', '2026-03-28', '2026-03-29', '2026-03-30', '2026-03-31', '2026-04-01']);
+  assert.deepEqual(m.days.map((d) => m.hours.filter((o) => o.dayIdx === d.idx).length), [24, 24, 23, 24, 24, 1]);
+  assert.deepEqual(m.days.map((d) => d.partial), [false, false, false, false, false, true], '23 Stunden am 29.03. sind ein ganzer Tag');
+  assert.equal(m.days[5].mean, 0);
+  assert.equal(m.days[5].max, null, 'der Rumpftag hat keine daily-Werte');
+
+  // 30.03.2026 10:00 MESZ: D = 30.03., 31.03. und der Rumpftag 01.04.
+  const now = weather.localNow(BERLIN, Date.UTC(2026, 2, 30, 8, 0));
+  assert.deepEqual([now.key, now.h], ['2026-03-30', 10]);
+  const v = heat.assess(m, now, PROF.floorScreed, []);
+  assert.deepEqual(v.D.map((d) => d.key), ['2026-03-30', '2026-03-31', '2026-04-01']);
+  assert.equal(v.level, 0);
+  assert.deepEqual(v.reasons.map((r) => r.key), ['calmNights', 'noJumps']);
+
+  // Gegenprobe: ohne die Markierung machte die eine Mitternachtsstunde aus 10 °C Tagesmittel einen Absturz
+  // um 10 K (drop48) und einen Sprung der Gradtagzahl um 10 Kd (gtRise)
+  const ohne = clone(m);
+  ohne.days[5].partial = false;
+  const falsch = heat.assess(ohne, now, PROF.floorScreed, []);
+  assert.equal(falsch.level, 2);
+  assert.deepEqual(falsch.reasons.map((r) => r.key), ['drop48', 'gtRise']);
+
+  // ein warmer Rumpftag hebt die Ampel ebenso wenig wie ein kalter
+  const warm = weather.model({ v: 2, fetched: 0, om: omFruehling(25), mos: [], mosStation: null, alerts: null, alertsStatus: 'none' });
+  assert.equal(heat.assess(warm, now, PROF.floorScreed, []).level, 0);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -715,6 +795,42 @@ test('assess mit DWD-Warnung: alerts-sturm hebt auf Stufe 2, severe auf 3, mit C
   assert.equal(heat.assess(m, NOW_JAN13, PROF.floorScreed).level, 1);
 });
 
+test('assess: abgelaufene Warnungen aus einem alten Cache zählen nicht mehr (expiresMs aus weather.model)', () => {
+  const alle = fixture('alerts-dwd-2026-10-10.json').alerts;
+  const m = modelOf('om-buerg-2026-10-09.json', { alerts: alle });
+  assert.equal(m.alerts.length, 17);
+  assert.equal(m.alerts.filter((a) => a.expiresMs === null).length, 7);
+
+  // nach dem letzten expires (11.10.2026 22:00 UTC) gelten nur noch die sieben Warnungen ohne Ende
+  const spaet = Date.UTC(2026, 9, 11, 22, 0);
+  const rest = heat.activeAlerts(m.alerts, spaet);
+  assert.equal(rest.length, 7);
+  assert.ok(rest.every((a) => a.expires === null && a.expiresMs === null));
+  assert.equal(heat.activeAlerts(m.alerts, spaet - 1).length, 8, 'eine Millisekunde vorher gelten die STURMBÖEN noch');
+  assert.equal(heat.alertMatches(rest).level, 2, 'STARKWIND und BÖEN ohne Ende halten Stufe 2');
+
+  // rohe Warnungen ohne expiresMs bleiben stehen (heat.js liest keine Zeitstempel), Unsinn wirft nicht
+  assert.equal(heat.activeAlerts(alle, spaet).length, 17);
+  assert.deepEqual(heat.activeAlerts(null, spaet), []);
+  assert.equal(heat.activeAlerts(m.alerts, undefined).length, 17, 'ohne Zeitpunkt läuft nichts ab');
+
+  // in der Ampel am 11.10. um 20:00 Berlin: STURMBÖEN bis 22:00 UTC und die sieben ohne Ende
+  const abend = weather.localNow(BERLIN, Date.UTC(2026, 9, 11, 18, 0));
+  const v = heat.assess(m, abend, PROF.floorScreed, m.alerts);
+  assert.equal(v.al.length, 8);
+  assert.equal(v.level, 2);
+  // am 09.10. ist noch keine abgelaufen: 16 Treffer wie mit den rohen Warnungen
+  assert.equal(heat.assess(m, weather.localNow(BERLIN, BUERG_NOW_MS), PROF.floorScreed, m.alerts).al.length, 16);
+  // eine Sturmwarnung, die um 09:00 UTC ablief, hebt die Ampel am Abend nicht mehr
+  const alt = m.alerts.filter((a) => a.event_de === 'SCHWERE STURMBÖEN');
+  assert.equal(alt.length, 1);
+  const ohneWarnung = heat.assess(m, abend, PROF.floorScreed, []);
+  const mitAlter = heat.assess(m, abend, PROF.floorScreed, alt);
+  assert.deepEqual(mitAlter.al, []);
+  assert.equal(mitAlter.level, ohneWarnung.level);
+  assert.deepEqual(mitAlter.reasons, ohneWarnung.reasons);
+});
+
 test('assess: die Regeln greifen genau auf der Schwelle (< bei warnMinN, <= bei den anderen)', () => {
   const m = modelOf('om-mild.json');                     // Nächte 9,5 / 10,5 / 10 °C, ruhig
   const keys = (v) => v.reasons.map((r) => r.key);
@@ -920,6 +1036,41 @@ test('plan: optional ab 9 °C, disagree bei mehr als 2 K Abstand zu MOSMIX, gust
   assert.equal(verdictOf('om-frost.json', JAN13_MS, BERLIN).plan[0].optional, false);
   assert.equal(verdictOf('om-sturm.json', JAN13_MS, BERLIN).plan[0].gusty, true);
   assert.equal(verdictOf('om-frost.json', JAN13_MS, BERLIN).plan[0].gusty, false);
+});
+
+test('bs-buerg über load(): Nacht 10./11. mit MOSMIX 9,9 gegen 8,5 °C ist keine Abweichung, 11,0 °C schon', async () => {
+  // der ganze Weg wie in der App: load() mit fakeFetch → model() → assess(09.10.2026 10:45 Berlin)
+  const lauf = async (bs) => {
+    const f = fakeFetch([
+      ['/v1/forecast', fixture('om-buerg-2026-10-09.json')],
+      ['/weather?', bs],
+      ['/alerts?', fixture('alerts-leer.json')]
+    ]);
+    const { cache, problems } = await weather.load({ lat: 48.881, lon: 9.441, elev: 414, cc: 'DE' }, { fetchImpl: f, nowMs: BUERG_NOW_MS });
+    assert.deepEqual(problems, []);
+    assert.equal(f.unmatched.length, 0);
+    const m = weather.model(cache);
+    return { m, v: heat.assess(m, weather.localNow(BERLIN, BUERG_NOW_MS), PROF.floorScreed, m.alerts) };
+  };
+
+  const { m, v } = await lauf(fixture('bs-buerg.json'));
+  assert.deepEqual(m.mosStation, { name: 'BACKNANG', height: 291, distance: 7692 });
+  const n = v.nights[1];
+  assert.equal(m.days[n.dayIdx].key, '2026-10-10', 'Nacht vom 10. auf den 11.');
+  assert.equal(n.min, 8.5);
+  assert.equal(n.mosMin, 9.9);
+  assert.equal(v.plan[1].disagree, false, '|9,9 − 8,5| = 1,4 K liegt unter 2 K');
+  assert.deepEqual(v.plan.map((e) => e.disagree), [false, false, false]);
+  assert.deepEqual(v.nights.map((x) => x.mosMin), [null, 9.9, null], 'MOSMIX trägt nur die Stunde 11.10. 00:00 UTC');
+
+  // dieselbe Stunde mit 11,0 °C: |11,0 − 8,5| = 2,5 K → Hinweis planDisagree
+  const bs = fixture('bs-buerg.json');
+  const w = bs.weather.find((x) => x.timestamp === '2026-10-11T00:00:00+00:00');
+  assert.ok(w);
+  w.temperature = 11.0;
+  const anders = await lauf(bs);
+  assert.equal(anders.v.nights[1].mosMin, 11);
+  assert.deepEqual(anders.v.plan.map((e) => e.disagree), [false, true, false]);
 });
 
 test('plan: strength nach Tiefstwert mit den Grenzen 0, 5 und 9 °C', () => {
