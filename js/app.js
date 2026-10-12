@@ -1708,6 +1708,14 @@
     on('placeSelect', 'change', onPlaceChange);
   }
 
+  // Service Worker nur über https oder auf localhost (dort sieht ihn auch der Offline-Smoke-Test).
+  // Ein Fehler beim Registrieren stört die App nicht, er steht in der Konsole.
+  function registerWorker() {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) { return; }
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost') { return; }
+    navigator.serviceWorker.register('./sw.js').catch(console.error);
+  }
+
   function init() {
     const H = root.Heizwarte || {};
     storage = H.storage;
@@ -1741,7 +1749,8 @@
       refresh(false);
     }
     document.addEventListener('visibilitychange', onVisible);
-    // Es folgen: Einstellungen, Größenänderung der Kurve, Service Worker (spätere Schritte)
+    registerWorker();
+    // Es folgen: Einstellungen, Größenänderung der Kurve (spätere Schritte)
   }
 
   if (typeof document !== 'undefined') {
