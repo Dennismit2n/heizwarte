@@ -4,7 +4,7 @@
  * wer dunkel will, stellt das System oder in den Einstellungen „Dunkel“. Hell gibt es nur, wenn das System es
  * meldet oder die Einstellungen es wählen (BAUPLAN Abschnitt 8, Theme ab M3):
  * zwei wortgleiche Blöcke unter :root, einmal per @media (prefers-color-scheme: light) ohne data-theme="dark",
- * einmal für data-theme="light". Die hellen Temperaturfarben (tcol) folgen im nächsten Schritt.
+ * einmal für data-theme="light". Die hellen Temperaturfarben (tcol, ANCH_LIGHT) stehen in chart.js; app.js wählt das Schema.
  * Alle Größen in rem, einzige Ausnahme sind die 48-Pixel-Tippflächen und der Seitenrand.
  * Keine Animationen, kein style-Attribut im Markup (CSP, Abschnitt 8): Zustände laufen über Klassen und hidden.
  */
@@ -102,8 +102,8 @@
 
 /* Hell (Abschnitt 8, Theme ab M3). Die zwei Blöcke sind wortgleich: der erste folgt dem System, solange die Einstellungen
    nicht „Dunkel“ gewählt haben, der zweite gilt, wenn sie „Hell“ gewählt haben. Werte laut Plan: Flächen und Text,
-   Ampel (alle über 4,5:1 auf --bg und --surface). Alles andere hier ist ein Entwurf; der Kontrasttest folgt im nächsten
-   Schritt. --edge, --accent und --on-accent haben im Plan keinen Hell-Wert und sind so gewählt, dass der Rand über
+   Ampel (alle über 4,5:1 auf --bg und --surface; tests/contrast.test.js prüft Ampel und Textfarben beider Themes).
+   Alles andere hier ist ein Entwurf. --edge, --accent und --on-accent haben im Plan keinen Hell-Wert und sind so gewählt, dass der Rand über
    3:1 und die Schrift auf dem Hauptknopf über 4,5:1 liegt. --t ist nur der Rückfall vor dem ersten Rendern. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {

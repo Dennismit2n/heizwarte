@@ -10,7 +10,7 @@
  *    Variablen für Kurve und Wettersymbole,
  *  - die Einstellungen haben <select id="themeSelect"> mit den drei Optionen, und app.js speichert über persist() und
  *    forget(), setzt data-theme samt Metas und zeichnet bei einem Systemwechsel neu.
- * Der Kontrast der hellen Farben folgt mit contrast.test.js im nächsten Schritt.
+ * Der Kontrast der Farben beider Themes prüft contrast.test.js.
  */
 'use strict';
 
@@ -21,7 +21,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const Heizwarte = require('./_load.js');
-const { THEME_COLOR, themeOf, applyTheme } = require('../js/app.js');
+const { THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme } = require('../js/app.js');
 
 const de = Heizwarte.i18n.I18N.de;
 const ROOT = path.join(__dirname, '..');
@@ -326,4 +326,74 @@ test('app.js: init() hört auf (prefers-color-scheme: light) und zeichnet beim W
   assert.match(init, /root\.matchMedia\('\(prefers-color-scheme: light\)'\)/);
   assert.match(init, /addEventListener\('change', onSchemeChange\)/);
   assert.match(init, /typeof root\.matchMedia === 'function'/, 'ohne matchMedia läuft die App weiter');
+});
+
+// ---------------------------------------------------------------------------------------------
+// app.js: Farbschema für die Temperaturfarben (chart.tcol, chart.scaleCss)
+// ---------------------------------------------------------------------------------------------
+
+test('schemeOf: eine Wahl (light/dark) gilt vor dem System, sonst entscheidet prefers-color-scheme: light, Standard dunkel', () => {
+  for (const hell of [true, false]) {
+    assert.equal(schemeOf('light', hell), 'light');
+    assert.equal(schemeOf('dark', hell), 'dark');
+  }
+  for (const attr of [undefined, null, '', 'system', 'Light', 'hell', 1, {}]) {
+    assert.equal(schemeOf(attr, true), 'light', JSON.stringify(attr) + ' mit hellem System');
+    assert.equal(schemeOf(attr, false), 'dark', JSON.stringify(attr) + ' mit dunklem System');
+  }
+  assert.equal(schemeOf(undefined, undefined), 'dark');
+});
+
+// currentScheme() liest document.documentElement.dataset.theme und root.matchMedia (in Node globalThis)
+function mitUmgebung(theme, matchMedia, fn) {
+  const doc = globalThis.document;
+  const mm = globalThis.matchMedia;
+  const hatMm = Object.prototype.hasOwnProperty.call(globalThis, 'matchMedia');
+  try {
+    globalThis.document = { documentElement: { dataset: theme === undefined ? {} : { theme } } };
+    if (matchMedia === undefined) { delete globalThis.matchMedia; } else { globalThis.matchMedia = matchMedia; }
+    return fn();
+  } finally {
+    if (doc === undefined) { delete globalThis.document; } else { globalThis.document = doc; }
+    if (hatMm) { globalThis.matchMedia = mm; } else { delete globalThis.matchMedia; }
+  }
+}
+
+test('currentScheme: data-theme gilt vor dem System; bei „System“ folgt es matchMedia; ohne matchMedia dunkel, nie ein Wurf', () => {
+  const system = (hell) => (q) => { assert.equal(q, '(prefers-color-scheme: light)'); return { matches: hell }; };
+  assert.equal(mitUmgebung('light', system(false), currentScheme), 'light');
+  assert.equal(mitUmgebung('dark', system(true), currentScheme), 'dark');
+  assert.equal(mitUmgebung(undefined, system(true), currentScheme), 'light');
+  assert.equal(mitUmgebung(undefined, system(false), currentScheme), 'dark');
+  assert.equal(mitUmgebung(undefined, undefined, currentScheme), 'dark', 'ohne matchMedia');
+  assert.equal(mitUmgebung(undefined, () => null, currentScheme), 'dark', 'matchMedia liefert nichts');
+  assert.equal(mitUmgebung('light', undefined, currentScheme), 'light');
+});
+
+test('app.js: jede Temperaturfarbe läuft mit dem geltenden Schema (--t, Tagesspanne), kein tcol-Aufruf ohne scheme', () => {
+  assert.match(funktion(appCode, 'renderNow'), /rootStyle\.setProperty\('--t', chart\.tcol\(cur\.temp, undefined, currentScheme\(\)\)\);/);
+  const karte = funktion(appCode, 'dayCard');
+  assert.match(karte, /const scheme = currentScheme\(\);/);
+  assert.match(karte, /p\.style\.color = chart\.tcol\(day\.min, undefined, scheme\);/);
+  assert.match(karte, /p\.style\.color = chart\.tcol\(day\.max, undefined, scheme\);/);
+  const aufrufe = appCode.match(/chart\.tcol\([^;]*;/g) || [];
+  assert.equal(aufrufe.length, 3, 'drei tcol-Aufrufe: --t und die zwei Zahlen der Tagesspanne');
+  for (const a of aufrufe) { assert.match(a, /(currentScheme\(\)|scheme)\)/, a); }
+});
+
+test('app.js: die Skala #scale bekommt ihren Verlauf per setProperty (CSSOM) in render(); fehlt das Element, tut renderScale nichts', () => {
+  const skala = funktion(appCode, 'renderScale');
+  assert.match(skala, /const el = document\.getElementById\('scale'\);/);
+  assert.match(skala, /if \(el\) \{ el\.style\.setProperty\('background', chart\.scaleCss\(currentScheme\(\)\)\); \}/);
+  assert.match(funktion(appCode, 'render'), /guard\(renderScale\);/);
+  assert.doesNotMatch(skala, /innerHTML|\.style\.background\s*=/);
+});
+
+test('app.js: ein Wechsel von Wahl oder System zeichnet über onSchemeChange neu, und render() setzt --t, Tagesspanne und Skala', () => {
+  // Wahl in den Einstellungen und Systemwechsel führen beide in onSchemeChange → render(); render() ruft renderNow,
+  // renderDays (dayCard) und renderScale, und alle drei fragen das Schema frisch ab statt es zu merken
+  const render = funktion(appCode, 'render');
+  assert.match(render, /guard\(\(\) => renderNow\(view\)\);/);
+  assert.match(render, /guard\(\(\) => renderDays\(view\)\);/);
+  assert.doesNotMatch(appCode, /let (?:scheme|currentTheme|colorScheme)\b/, 'das Schema wird nicht zwischengespeichert');
 });

@@ -1,9 +1,9 @@
 /*
  * Heizwarte — Temperaturfarben, Wettersymbole, Kurve als SVG-String (layout) getrennt von der Bedienung (bind) und Textzusammenfassung
  *
- * Stand dieses Schritts: tcol() mit der dunklen Ankertabelle und icon(). Die Kurve (layout, summary, bind),
- * die Skala (scaleCss) und die helle Ankertabelle kommen in späteren Schritten dazu.
- * Nichts hier fasst das DOM an: beide Funktionen liefern Zeichenketten.
+ * Stand dieses Schritts: tcol() und scaleCss() mit der dunklen und der hellen Ankertabelle, dazu icon(). Die Kurve (layout,
+ * summary, bind) kommt in einem späteren Schritt dazu.
+ * Nichts hier fasst das DOM an: alle Funktionen liefern Zeichenketten.
  */
 (function (root) {
   'use strict';
@@ -13,11 +13,17 @@
   // Anker [°C, L %, C, H] wie Bürg index:222. EINE Abweichung: der −10-°C-Anker ist von [-10,55,.14,275] auf
   // [-10,62,.13,275] gehoben. Bürgs Wert ergibt nur 3,49:1 auf --surface; tcol() färbt aber echten Kleintext
   // (Tagesspanne, Nachttief). Mit dem gehobenen Anker liegen laut Plan (Abschnitt 5 chart) alle 22 Stufen
-  // der Skala über 4,5:1; der Kontrasttest dazu kommt in Meilenstein 3. °C-Anker −10/0/10/18/25/32 bleiben (B:44).
+  // der Skala über 4,5:1 (tests/contrast.test.js hält das fest). °C-Anker −10/0/10/18/25/32 bleiben (B:44).
   const ANCH_DARK = [[-10, 62, 0.13, 275], [0, 72, 0.11, 245], [10, 85, 0.05, 210], [18, 88, 0.08, 90], [25, 76, 0.16, 58], [32, 63, 0.20, 28]];
 
-  // scheme → Ankertabelle. Die helle Tabelle (ANCH_LIGHT) kommt mit dem Theme in Meilenstein 3.
-  const ANCHORS = { dark: ANCH_DARK };
+  // Helle Ankertabelle (Theme hell): gleiche C und H, L auf 42–48 % gesenkt, damit jede Stufe als Text auf #FFFFFF und
+  // #F3F3F6 mindestens 4,5:1 erreicht (tests/contrast.test.js, der Test schlägt fehl statt die Werte anzupassen).
+  // Der 18-°C-Anker ist bewusst Braunocker (H 90, L 46): kein Gelb hält auf Weiß. Die Werte sind die aus dem Plan; die
+  // Prüfung ergab keinen Anlass, sie zu ändern (kleinstes Verhältnis 5,74:1 bei 10 °C auf #F3F3F6).
+  const ANCH_LIGHT = [[-10, 42, 0.14, 275], [0, 45, 0.11, 245], [10, 48, 0.05, 210], [18, 46, 0.08, 90], [25, 46, 0.16, 58], [32, 44, 0.20, 28]];
+
+  // scheme → Ankertabelle; ein unbekanntes scheme gilt als dunkel (Standard der App, Dennis ist lichtempfindlich)
+  const ANCHORS = { dark: ANCH_DARK, light: ANCH_LIGHT };
 
   // Neutrale Mitte der Skala für Werte ohne Zahl
   const NEUTRAL_C = 10;
@@ -25,9 +31,9 @@
   // Farbe zur Temperatur t (°C) als 'oklch(L% C H[ / a])'. Formel wie Bürg index:224–228: Segment suchen,
   // L, C und H linear mischen. Der Farbton läuft numerisch linear, nicht auf dem kürzeren Kreisbogen
   // (210 → 90 läuft über 150, Grün); unter −10 und über 32 bleibt die Farbe auf dem Randanker.
-  // Kein Wert (null, NaN) ergibt die neutrale Mitte statt 'oklch(NaN% …)'.
+  // Kein Wert (null, NaN) ergibt die neutrale Mitte statt 'oklch(NaN% …)'. scheme 'dark' (Standard) oder 'light'.
   function tcol(t, alpha, scheme) {
-    const A = ANCHORS[scheme] || ANCHORS.dark;
+    const A = scheme === 'light' ? ANCHORS.light : ANCHORS.dark;
     const x = typeof t === 'number' && Number.isFinite(t) ? t : NEUTRAL_C;
     let i = 0;
     if (x <= A[0][0]) { i = 0; }
@@ -41,6 +47,14 @@
     const H = lo[3] + (hi[3] - lo[3]) * f;
     const a = alpha !== undefined && alpha !== null ? ' / ' + alpha : '';
     return 'oklch(' + L.toFixed(1) + '% ' + C.toFixed(3) + ' ' + H.toFixed(1) + a + ')';
+  }
+
+  // Farbverlauf der Skala unter der Kurve: 22 Stützstellen von −10 bis 32 °C in 2-K-Schritten (Bürg index:230), als Wert
+  // für el.style.setProperty('background', …) (CSSOM, mit der CSP vereinbar).
+  function scaleCss(scheme) {
+    const stops = [];
+    for (let k = 0; k < 22; k++) { stops.push(tcol(-10 + k * 2, undefined, scheme)); }
+    return 'linear-gradient(90deg,' + stops.join(',') + ')';
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -103,7 +117,7 @@
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + s + '" height="' + s + '" viewBox="0 0 24 25" aria-hidden="true" focusable="false">' + g + '</svg>';
   }
 
-  const api = { ANCH_DARK, tcol, icon };
+  const api = { ANCH_DARK, ANCH_LIGHT, tcol, scaleCss, icon };
   root.Heizwarte.chart = api;
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
