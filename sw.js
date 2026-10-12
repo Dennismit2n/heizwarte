@@ -6,7 +6,8 @@
  */
 'use strict';
 
-// Bei jedem Deploy um 1 erhöhen (zusammen mit den ?v=-Stempeln in index.html). Bürg war heizwarte-v1.
+// Bürg war heizwarte-v1; der M1-Deploy geht schon mit heizwarte-v2 raus (BAUPLAN Abschnitt 9). Ab M2 bei
+// jedem Deploy um 1 erhöhen (M2 → v3), zusammen mit den ?v=-Stempeln in index.html.
 const CACHE = 'heizwarte-v2';
 
 // Genau die Dateien, die index.html, das Manifest und css/style.css laden, mit denselben ?v=-Stempeln
@@ -34,8 +35,17 @@ const SHELL = [
   './assets/fonts/atkinson-hyperlegible-latin-ext-700-normal.woff2'
 ];
 
+// Die ganze Hülle in den Cache, am HTTP-Cache des Browsers vorbei (cache: 'reload'). GitHub Pages schickt
+// jede Datei mit max-age=600; mit dem Standardmodus käme ./ womöglich als alte Startseite aus dem HTTP-Cache,
+// während die Skripte mit dem neuen ?v=-Stempel frisch geladen werden. activate löscht danach die alte Hülle,
+// und ohne Netz verlangte die alte Startseite Skripte, die in keinem Cache mehr liegen: leere Seite.
+// Einzige Stelle mit addAll, damit Installation und Selbstheilung gleich laden.
+function fillShell(cache) {
+  return cache.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })));
+}
+
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(fillShell).then(() => self.skipWaiting()));
 });
 
 // Nur eigene alte Hüllen löschen. Cache Storage gehört dem ganzen Origin, die Hüllen der anderen
@@ -53,7 +63,7 @@ self.addEventListener('activate', e => {
 // sonst scheiterte der nächste Start ohne Netz.
 async function healShell(cache) {
   const index = await cache.match('./index.html');
-  if (!index) { await cache.addAll(SHELL); }
+  if (!index) { await fillShell(cache); }
 }
 
 async function answer(e) {
@@ -62,9 +72,11 @@ async function answer(e) {
   const cache = await caches.open(CACHE);
   const hit = await cache.match(req);
 
-  // Netzantwort holen und, wenn sie in Ordnung ist, für das nächste Mal ablegen (nie ein 404 oder 500)
+  // Netzantwort holen und, wenn sie in Ordnung ist, für das nächste Mal ablegen (nie ein 404 oder 500).
+  // Eine Navigation fragt dabei immer beim Server nach (no-cache: bedingte Anfrage mit ETag, meist nur 304),
+  // sonst bekäme der Cache bis zu zehn Minuten lang die alte Startseite aus dem HTTP-Cache zu neuem Code.
   let stored = null;
-  const net = fetch(req).then(r => {
+  const net = fetch(req, isNav ? { cache: 'no-cache' } : undefined).then(r => {
     if (r.ok) { stored = cache.put(req, r.clone()).catch(console.error); }
     return r;
   });

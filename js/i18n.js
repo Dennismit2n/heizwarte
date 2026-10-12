@@ -262,7 +262,7 @@
       langLabel: 'Sprache',
 
       // --- Fußzeile (Quellenangaben nach KT §3.4, §4, §5.2, §6.3) ---
-      footerWeather: 'Wetterdaten: Open-Meteo.com (CC BY 4.0), Modell DWD ICON.',
+      footerWeather: 'Wetterdaten: Open-Meteo.com (CC BY 4.0); in Deutschland, Österreich und der Schweiz Modell DWD ICON.',
       footerDwd: 'Warnungen und zweite Meinung (MOSMIX): Quelle: Deutscher Wetterdienst, über Bright Sky.',
       footerAmpel: 'Heiz-Ampel: Datenbasis Deutscher Wetterdienst, eigene Elemente ergänzt. Die Ampel ist eine Faustregel, keine Norm.',
       footerVdi: 'Gradtagzahl nach VDI 3807: 20 °C minus Tagesmittel, nur an Heiztagen unter 15 °C.',
