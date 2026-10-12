@@ -1,0 +1,116 @@
+/*
+ * Heizwarte — Grundstile. M1–M2 nur dunkel (BAUPLAN Abschnitt 8, Theme-Stufen):
+ * Der Hell-Block kommt zusammen mit den hellen Temperaturfarben in M3.
+ * Alle Größen in rem, einzige Ausnahme sind die 48-Pixel-Tippflächen und der Seitenrand.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Flächen und Text, Werte von Bürg (index:20–36); --faint 55 % → 62 % wegen WCAG 4,5:1 für Kleintext */
+  --bg: oklch(17% 0.018 252);
+  --surface: oklch(21.5% 0.02 252);
+  --line: oklch(31% 0.022 252);
+  --fg: oklch(95% 0.008 250);
+  --muted: oklch(72% 0.02 250);
+  --faint: oklch(62% 0.02 250);
+
+  /* aktuelle Temperaturfarbe, wird später per style.setProperty gesetzt */
+  --t: oklch(85% 0.05 210);
+
+  /* Ampel */
+  --ok: oklch(76% 0.15 152);
+  --warn: oklch(85% 0.16 92);
+  --alarm: oklch(73% 0.17 55);
+  --crit: oklch(66% 0.21 25);
+
+  /* Schriften: Atkinson Hyperlegible kommt selbst gehostet in einem späteren Schritt, bis dahin greift der Rückfall */
+  --display: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Ein Bildschirm mit hidden darf nie von einer display-Regel überstimmt werden. */
+[hidden] {
+  display: none !important;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 1.125rem/1.5 var(--body);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding-inline: 16px;
+  padding-block: 1.25rem 3rem;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.2;
+}
+
+h1 {
+  font-family: var(--display);
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.375rem;
+}
+
+h3 {
+  font-size: 1.125rem;
+}
+
+/* Tippflächen und Fokus (Abschnitt 8): mindestens 48 px, Trefferliste 64 px, Fokusring nie weg */
+button,
+.hit,
+select,
+input,
+summary,
+a.footer-link {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+.hit {
+  min-height: 64px;
+}
+
+a.footer-link {
+  display: inline-block;
+}
+
+:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
