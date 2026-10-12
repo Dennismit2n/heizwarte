@@ -51,6 +51,23 @@ for (const tg of all) {
   if (tg.attrs.id !== undefined) { byId.set(tg.attrs.id, tg); }
 }
 
+// Argumente aller Aufrufe von name(…) im Code als Text, mit Klammerzählung (auch die Definition steht dabei)
+function aufrufe(code, name) {
+  const out = [];
+  let i = -1;
+  while ((i = code.indexOf(name + '(', i + 1)) >= 0) {
+    if (/[\w$.]/.test(code[i - 1] || '')) { continue; }
+    let depth = 0;
+    let j = i + name.length;
+    for (; j < code.length; j++) {
+      if (code[j] === '(') { depth++; }
+      else if (code[j] === ')' && --depth === 0) { break; }
+    }
+    out.push(code.slice(i + name.length + 1, j));
+  }
+  return out;
+}
+
 // Der Teil des Markups von einem Bildschirm bis zum nächsten
 function screenSlice(id) {
   const start = html.indexOf('id="' + id + '"');
@@ -199,11 +216,19 @@ test('CSS: Tippflächen 48 und 64 px, Fokusring bleibt, Größen in rem', () => 
   assert.doesNotMatch(css, /@keyframes|animation:|transition:/, 'keine Animationen (Abschnitt 8)');
 });
 
-test('app.js: kein innerHTML, kein style-Attribut, kein eval', () => {
+test('app.js: innerHTML nur in setSvg und nur mit chart.icon/chart.layout, kein style-Attribut, kein eval', () => {
   const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
-  assert.doesNotMatch(code, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+  assert.doesNotMatch(code, /outerHTML|insertAdjacentHTML|document\.write/);
   assert.doesNotMatch(code, /setAttribute\(\s*['"]style|cssText|\beval\(|new Function/);
   assert.doesNotMatch(code, /localStorage/, 'Zugriffe laufen über Heizwarte.storage');
+  // genau eine Stelle schreibt HTML: setSvg. API-Text (Photon, Warnungen) geht nur per textContent hinein.
+  assert.equal((code.match(/innerHTML/g) || []).length, 1, 'innerHTML steht mehr als einmal im Code');
+  assert.match(code, /function setSvg\(el, markup\)\s*\{\s*el\.innerHTML = markup;\s*\}/);
+  const echte = aufrufe(code, 'setSvg').filter((a) => a !== 'el, markup');
+  assert.ok(echte.length >= 2, 'setSvg wird für Jetzt-Symbol und Tageskarten gebraucht');
+  for (const a of echte) {
+    assert.match(a, /^[\w$.()']+,\s*chart\.(icon|layout)\(/, 'setSvg mit etwas anderem als chart.icon/chart.layout: ' + a);
+  }
 });
 
 test('app.js: jede ID, die der Code anfasst, steht im Markup', () => {
@@ -236,10 +261,12 @@ test('app.js: jede ID, die der Code anfasst, steht im Markup', () => {
 test('app.js: jeder Schlüssel, den der Code als Zeichenkette nennt, steht in de', () => {
   const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
   const keys = new Set();
-  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now)[A-Z]\w*)'/g;
+  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now|level|alert|day|reason|charge|plan)[A-Z]\w*)'/g;
   let m;
   while ((m = re.exec(code)) !== null) { keys.add(m[1]); }
-  for (const k of ['setupSearching', 'setupSearch', 'setupByLocation', 'setupConfirmYes', 'errNeedPlace', 'errNoHit', 'errElevRange', 'hitHouse']) {
+  for (const k of ['setupSearching', 'setupSearch', 'setupByLocation', 'setupConfirmYes', 'errNeedPlace', 'errNoHit', 'errElevRange', 'hitHouse',
+    'levelTitle0', 'levelText0', 'levelOf', 'levelNoData', 'chargeTonight', 'chargeHigh', 'planNow', 'planToday', 'planDay',
+    'reasonNightMin', 'alertFrom', 'alertUntil', 'dayToday', 'dayColder', 'daySame', 'nowFeels', 'nowNightMin']) {
     assert.ok(keys.has(k), 'Prüfer erkennt ' + k + ' nicht');
   }
   // Namen wie 'btnSearch' sind Element-IDs und stehen im Markup; alles andere muss ein Schlüssel sein
@@ -264,5 +291,106 @@ test('Heizart-Karten nennen Namen und Laiensatz aus den profile*-Schlüsseln', (
   for (const type of ['Radiator', 'FloorScreed', 'FloorDry', 'HeatpumpFloor', 'Storage']) {
     assert.match(slice, new RegExp('data-i18n="profile' + type + '"'));
     assert.match(slice, new RegExp('data-i18n="profileHint' + type + '"'));
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Hauptbildschirm: Kopf, Jetzt, Ampel, Warnungen, Tage (BAUPLAN Abschnitt 8, Blöcke 1 und 3 bis 6)
+// ---------------------------------------------------------------------------------------------
+
+test('Hauptbildschirm: Blöcke in der Reihenfolge des Plans, Screenreader-Reihenfolge = DOM-Reihenfolge', () => {
+  const folge = ['placeName', 'placePick', 'reload', 'settingsBtn', 'heatHint', 'status', 'now', 'verdict', 'alerts', 'days'];
+  const slice = screenSlice('s-main');
+  let letzte = -1;
+  for (const id of folge) {
+    const pos = slice.indexOf('id="' + id + '"');
+    assert.ok(pos > letzte, '#' + id + ' fehlt oder steht an der falschen Stelle');
+    letzte = pos;
+  }
+  // Überschriften des Hauptbildschirms: h2 je Block, keine Stufe übersprungen (die h3 der Karten entstehen in app.js)
+  const ebenen = tags(slice).filter((tg) => /^h[1-6]$/.test(tg.name));
+  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h2', 'h2', 'h2']);
+  assert.equal(ebenen[0].attrs.tabindex, '-1');
+  assert.equal(byId.get('verdictTitle').name, 'h2');
+});
+
+test('Kopfzeile: Ortswahl mit sichtbarer Beschriftung, zwei Textknöpfe mit Schlüssel, kein disabled', () => {
+  const label = all.find((tg) => tg.name === 'label' && tg.attrs.for === 'placeSelect');
+  assert.ok(label, '<label for="placeSelect"> fehlt');
+  assert.equal(label.attrs['data-i18n'], 'placeLabel');
+  assert.equal(byId.get('placeSelect').name, 'select');
+  assert.equal(byId.get('placePick').attrs.hidden, '', 'Ortswahl erscheint erst ab zwei Orten');
+  for (const [id, key] of [['reload', 'btnReload'], ['settingsBtn', 'btnSettings']]) {
+    const b = byId.get(id);
+    assert.equal(b.name, 'button');
+    assert.equal(b.attrs.type, 'button');
+    assert.equal(b.attrs['data-i18n'], key, '#' + id + ' trägt den Schlüssel ' + key);
+    assert.equal(b.attrs.disabled, undefined);
+  }
+  // der Hinweis zur angenommenen Heizart bleibt mit seinem Knopf erhalten
+  assert.equal(byId.get('heatHint').attrs.hidden, '');
+  assert.equal(byId.get('btnHeatChange').attrs['data-i18n'], 'btnChange');
+});
+
+test('Jetzt, Ampel, Warnungen, Tage: die Bausteine, die app.js füllt, stehen im Markup', () => {
+  for (const id of ['nowBody', 'nowTemp', 'nowIcon', 'nowCond', 'nowFeels', 'nowWind', 'nowHumidity', 'nowNightMin',
+    'verdictTitle', 'verdictAction', 'verdictText', 'verdictReasons', 'verdictNote',
+    'alertLang', 'alertList', 'alertSource', 'alertUnavailable', 'dayList']) {
+    assert.ok(byId.has(id), '#' + id);
+  }
+  // Handlungssatz direkt nach der Stufenüberschrift, vor allem anderen (Punkt 4)
+  const slice = screenSlice('s-main');
+  const pos = (id) => slice.indexOf('id="' + id + '"');
+  assert.ok(pos('verdictTitle') < pos('verdictAction') && pos('verdictAction') < pos('verdictText') &&
+    pos('verdictText') < pos('verdictReasons'));
+  assert.equal(byId.get('verdictReasons').name, 'ul', 'Begründungen sind eine Liste aus ganzen Sätzen, keine Chips');
+  // vier Lampen, nur Zierde: aria-hidden am Behälter, von Stufe 3 oben bis Stufe 0 unten
+  const lamp = tags(slice).find((tg) => (tg.attrs.class || '') === 'lamp');
+  assert.ok(lamp);
+  assert.equal(lamp.attrs['aria-hidden'], 'true');
+  const lampen = slice.slice(lamp.pos, slice.indexOf('</div>', lamp.pos));
+  assert.deepEqual(Array.from(lampen.matchAll(/<i class="(l\d)">/g)).map((m) => m[1]), ['l3', 'l2', 'l1', 'l0']);
+  // Warnungen und Tage sind bis zum ersten Rendern verborgen; der Warnblock hat seine Überschrift mit Schlüssel
+  assert.equal(byId.get('alerts').attrs.hidden, '');
+  assert.equal(byId.get('days').attrs.hidden, '');
+  assert.equal(byId.get('alertSource').attrs['data-i18n'], 'alertSource');
+  assert.equal(byId.get('alertUnavailable').attrs['data-i18n'], 'alertUnavailable');
+  assert.match(slice, /<h2 data-i18n="alertTitle">/);
+  assert.match(slice, /<h2 data-i18n="daysTitle">/);
+});
+
+test('Einstellungen: der Weg zurück ist da, kein Bildschirm ohne Ausgang', () => {
+  const back = byId.get('btnSettingsBack');
+  assert.equal(back.attrs['data-i18n'], 'btnBack');
+  assert.ok(html.indexOf('id="btnSettingsBack"') < html.indexOf('data-i18n="settingsTitle"'), 'Zurück steht über der Überschrift');
+});
+
+test('CSS: Wettersymbol-Variablen, Ampelfarbe in --lv, Tage ab 720 px dreispaltig', () => {
+  for (const v of ['--ic-sun', '--ic-moon', '--ic-cloud', '--ic-cloud-dark', '--ic-fog', '--ic-rain', '--ic-snow', '--ic-bolt']) {
+    assert.match(css, new RegExp(v + ':\\s*oklch\\('), v + ' fehlt in :root');
+  }
+  assert.match(css, /clamp\(3rem, 14vw, 5rem\)/, 'große Temperatur: clamp(3rem, 14vw, 5rem)');
+  assert.match(css, /var\(--lv, var\(--ok\)\)/);
+  assert.match(css, /@media \(min-width: 720px\)\s*\{\s*\.days\s*\{\s*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+});
+
+test('Stufen- und Aufladungs-Schlüssel, die app.js aus Zeichenkette und Zahl baut, stehen in de', () => {
+  for (let n = 0; n <= 3; n++) {
+    for (const k of ['level', 'levelTitle', 'levelText']) { assert.ok(has(de, k + n), k + n); }
+  }
+  assert.match(de.levelTitle1, /\{when\}/);
+  assert.match(de.levelText1, /\{onset\}.*\{lead\}/);
+  for (const k of ['chargeHigh', 'chargeUp', 'chargeNormal', 'chargeLow', 'chargeTonight']) { assert.ok(has(de, k), k); }
+  // app.js führt die vier Stufen als feste Schlüsseltabellen, nie als zusammengesetzten Text
+  for (const reihe of ['level', 'levelTitle', 'levelText']) {
+    const liste = [0, 1, 2, 3].map((n) => "'" + reihe + n + "'").join(', ');
+    assert.ok(app.includes('[' + liste + ']'), 'Tabelle für ' + reihe + ' fehlt in app.js');
+  }
+  // app.js verdrahtet die vier Aufladungsstufen von PlanEntry.charge
+  for (const [stufe, key] of [['high', 'chargeHigh'], ['up', 'chargeUp'], ['normal', 'chargeNormal'], ['low', 'chargeLow']]) {
+    assert.ok(app.includes(stufe + ": '" + key + "'"), 'CHARGE_KEY ' + stufe);
+  }
+  for (const k of ['nightMin', 'drop48', 'coldWindy', 'frost', 'gtRise', 'alert', 'calmNights', 'noJumps']) {
+    assert.ok(app.includes("case '" + k + "'"), 'reasonText kennt ' + k);
   }
 });
