@@ -1,0 +1,11 @@
+{
+  "alerts": [{"id":3039659,"alert_id":3039659,"effective":"2026-10-10T10:59:00+00:00","onset":"2026-10-10T19:00:00+00:00","expires":"2026-10-11T09:00:00+00:00","category":"met","response_type":"prepare","urgency":"immediate","severity":"moderate","certainty":"likely","event_code":53,"event_en":"storm-force gusts","event_de":"SCHWERE STURMBÖEN","headline_en":"Official WARNING of STORM-FORCE GUSTS","headline_de":"Amtliche WARNUNG vor SCHWEREN STURMBÖEN","description_en":"There is a risk of storm-force gusts (level 2 of 4).\nHeight range: > 1000 m; Max. gusts: 85-100 km/h; Wind direction: south-west","description_de":"Es treten oberhalb 1000 m schwere Sturmböen mit Geschwindigkeiten zwischen 85 km/h (24 m/s, 47 kn, Bft 9) und 100 km/h (28 m/s, 55 kn, Bft 10) aus südwestlicher Richtung auf.","instruction_en":"Hazard(s) caused by: single falling trees; objects falling to the ground. \nRecommendations for what to do: \nSecure scaffolding and free-standing objects (e.g. screens and platforms/stages). For example, fasten tents and coverings or, if there is enough time, take them down completely. Watch out for falling objects (e.g. large branches, roof tiles) and seek shelter if possible.","instruction_de":"Gefahr durch: vereinzelt umstürzende Bäume; herabstürzende Gegenstände. \nHandlungsempfehlungen: \nGerüste und frei stehende Objekte (z.B. Leinwände und Bühnen) sichern; z.B. Zelte und Abdeckungen befestigen, wenn möglich, rechtzeitig abbauen; im Freien auf herabfallende Gegenstände (z.B. große Äste, Dachziegel) achten und ggf. Schutz suchen","status":"actual","warn_cell_ids":[815085370]}],
+  "location": {
+    "warn_cell_id": 808119085,
+    "name": "Stadt Winnenden",
+    "name_short": "Winnenden",
+    "district": "Rems-Murr-Kreis",
+    "state": "Baden-Württemberg",
+    "state_short": "BW"
+  }
+}
