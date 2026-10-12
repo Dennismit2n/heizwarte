@@ -1,10 +1,10 @@
 /*
  * Heizwarte — Tests für js/heat.js (reine Heizlogik) auf den Fixtures in tests/fixtures/
  *
- * heat.js rechnet auf dem Ergebnis von weather.model(); deshalb prüft der erste Block auch das Modell, das
- * die Fixtures liefern (der volle Test von weather.js folgt mit dessen Abruf-Teil). Alle Zeiten sind feste
- * Zeitpunkte (Date.UTC) und werden über weather.localNow() in Ortszeit gebracht — nichts hängt an der Zeitzone
- * des Rechners; der letzte Test beweist das, indem er die Prozess-Zeitzone wechselt.
+ * heat.js rechnet auf dem Ergebnis von weather.model(); das Modell selbst (Stunden, Tage, Ortszeit, MOSMIX-Join,
+ * Zonen-Rückfall) prüft tests/weather.test.js. Alle Zeiten sind feste Zeitpunkte (Date.UTC) und werden über
+ * weather.localNow() in Ortszeit gebracht — nichts hängt an der Zeitzone des Rechners; der letzte Test beweist
+ * das, indem er die Prozess-Zeitzone wechselt.
  */
 'use strict';
 
@@ -150,113 +150,8 @@ test('THRESH, DEFAULT_THRESH, PROFILES: die Zahlen aus Abschnitt 5 und 7', () =>
 });
 
 // ---------------------------------------------------------------------------------------------
-// Modell aus den Fixtures (Voraussetzung für alles Weitere)
+// Kaputte Antworten (das übrige Modell prüft weather.test.js)
 // ---------------------------------------------------------------------------------------------
-
-test('Modell om-buerg-2026-10-09: 120 Stunden, 5 Tage, Tageswerte über daily zugeordnet', () => {
-  const m = modelOf('om-buerg-2026-10-09.json');
-  assert.equal(m.tz, 'Europe/Berlin');
-  assert.equal(m.hours.length, 120);
-  assert.equal(m.days.length, 5);
-  assert.equal(m.gaps, 0);
-  assert.deepEqual(m.days.map((d) => d.key), ['2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12']);
-  assert.deepEqual(m.days.map((d) => d.idx), [0, 1, 2, 3, 4]);
-  assert.deepEqual(Object.keys(m).sort(), ['current', 'days', 'fetched', 'gaps', 'hours', 'mosStation', 'tz']);
-  assert.deepEqual(Object.keys(m.hours[0]).sort(),
-    ['app', 'cc', 'code', 'dayIdx', 'dew', 'gust', 'h', 'isDay', 'mos', 'ms', 'pp', 'pr', 'rh', 'sw', 'temp', 'wind']);
-  assert.deepEqual(Object.keys(m.days[0]).sort(),
-    ['code', 'gt', 'gust', 'idx', 'key', 'max', 'mean', 'min', 'rain', 'sun', 'sunriseMs', 'sunsetMs']);
-
-  // erste Stunde: 08.10.2026 00:00 in Berlin = 07.10. 22:00 UTC
-  assert.equal(m.hours[0].ms, Date.UTC(2026, 9, 7, 22, 0));
-  assert.equal(m.hours[0].h, 0);
-  assert.equal(m.hours[0].dayIdx, 0);
-  assert.equal(m.hours[119].h, 23);
-  assert.equal(m.hours[119].dayIdx, 4);
-  m.hours.forEach((o, i) => { if (i) { assert.equal(o.ms - m.hours[i - 1].ms, HOUR); } });
-
-  // Tageswerte stehen am richtigen Tag (Daten der echten Antwort vom 09.10.2026)
-  const d1 = m.days[1];
-  assert.equal(d1.max, 11.1);
-  assert.equal(d1.min, 2.9);
-  near(d1.sun, 10496.51 / 3600);
-  assert.equal(d1.code, 61);
-  assert.equal(d1.rain, 2.5);
-  assert.equal(d1.gust, 27.4);
-  assert.equal(d1.sunriseMs, Date.UTC(2026, 9, 9, 5, 33));
-  assert.equal(d1.sunsetMs, Date.UTC(2026, 9, 9, 16, 44));
-
-  // Tagesmittel = Mittel aller Stundenwerte, Gradtagzahl über degreeDay
-  const t1 = m.hours.filter((o) => o.dayIdx === 1).map((o) => o.temp);
-  assert.equal(t1.length, 24);
-  near(d1.mean, t1.reduce((a, b) => a + b, 0) / 24);
-  near(d1.gt, 20 - d1.mean);
-
-  assert.equal(m.current.temp, 8.6);
-  assert.equal(m.current.isDay, true);
-});
-
-test('Modell: MOSMIX wird über ms verbunden, mosStation und fetched kommen aus dem Cache', () => {
-  const om = fixture('om-mild.json');
-  const t = om.hourly.time;
-  const mos = [[t[30] * 1000, 7.5], [t[31] * 1000, null], [(t[32] + 1800) * 1000, 3]];   // letzte liegt neben dem Raster
-  const station = { name: 'BACKNANG', height: 291, distance: 7692 };
-  const m = weather.model({ v: 2, fetched: 12345, om, mos, mosStation: station, alerts: null, alertsStatus: 'none' });
-  assert.equal(m.hours[30].mos, 7.5);
-  assert.equal(m.hours[31].mos, null);
-  assert.equal(m.hours[32].mos, null);
-  assert.equal(m.hours.filter((o) => o.mos !== null).length, 1);
-  assert.deepEqual(m.mosStation, station);
-  assert.equal(m.fetched, 12345);
-});
-
-test('Modell om-null: Stunden ohne Temperatur fallen weg, gaps zählt, kein NaN', () => {
-  const m = modelOf('om-null.json');
-  assert.equal(m.hours.length, 115);
-  assert.equal(m.gaps, 5);
-  assert.deepEqual(alleZahlenEndlich(m.days, 'days', []), []);
-  for (const d of m.days) { assert.ok(Number.isFinite(d.mean) && Number.isFinite(d.gt), d.key); }
-  // am Tag 2 fehlen 03, 04 und 05 Uhr
-  const h2 = m.hours.filter((o) => o.dayIdx === 2).map((o) => o.h);
-  assert.equal(h2.length, 21);
-  assert.ok(!h2.includes(3) && !h2.includes(4) && !h2.includes(5));
-  // fehlende Windwerte bleiben null, die Stunde selbst bleibt
-  assert.equal(m.hours.filter((o) => o.wind === null).length, 1);
-  assert.equal(m.hours.filter((o) => o.gust === null).length, 1);
-});
-
-test('Modell: unbekannte Zone fällt auf den festen Offset zurück, kein Wurf', () => {
-  const om = fixture('om-mild.json');
-  om.timezone = 'Mars/Olympus';
-  om.utc_offset_seconds = 3600;
-  const m = weather.model({ v: 2, fetched: 0, om, mos: [], mosStation: null, alerts: null, alertsStatus: 'none' });
-  assert.equal(m.tz, 'Etc/GMT-1');
-  assert.equal(m.hours[0].h, 0);
-  assert.equal(m.days[0].key, '2026-01-12');
-  assert.equal(weather.tzSafe('Mars/Olympus', 7200), 'Etc/GMT-2');
-  assert.equal(weather.tzSafe('Mars/Olympus', 19800), 'UTC');
-  assert.equal(weather.tzSafe('Mars/Olympus', 0), 'UTC');
-  assert.equal(weather.tzSafe('Europe/Lisbon', 7200), 'Europe/Lisbon');
-});
-
-test('localNow: eine Laufzeit, die Mitternacht als Stunde 24 meldet, ergibt Stunde 0', () => {
-  const echt = Intl.DateTimeFormat;
-  Intl.DateTimeFormat = function () {
-    return {
-      formatToParts: () => [
-        { type: 'year', value: '2026' }, { type: 'literal', value: '-' }, { type: 'month', value: '01' },
-        { type: 'day', value: '14' }, { type: 'hour', value: '24' }, { type: 'minute', value: '05' }
-      ]
-    };
-  };
-  try {
-    // eine Zone, die in diesem Prozess noch nie benutzt wurde, damit kein echter Formatierer im Zwischenspeicher liegt
-    assert.deepEqual(weather.localNow('Etc/GMT-9', 1000), { key: '2026-01-14', h: 0, min: 5, ms: 1000 });
-  } finally {
-    Intl.DateTimeFormat = echt;
-  }
-  assert.deepEqual(weather.localNow('Etc/GMT-9', Date.UTC(2026, 0, 13, 15, 5)), { key: '2026-01-14', h: 0, min: 5, ms: Date.UTC(2026, 0, 13, 15, 5) });
-});
 
 test('Modell: leere oder kaputte Antwort wirft nicht, assess meldet tooOld', () => {
   for (const om of [{}, { hourly: {} }, { hourly: { time: [] } }, { hourly: { time: [1], temperature_2m: [null] } }]) {
