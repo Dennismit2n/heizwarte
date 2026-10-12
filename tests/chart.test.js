@@ -389,6 +389,59 @@ test('layout: die zweite Meinung (MOSMIX) nur bei Station bis 25 km; sonst gleic
   assert.equal(leer.markup, ohne.markup);
 });
 
+test('layout: die zweite Meinung erst ab zwei Werten im Fenster; ein einzelner Wert zeichnet nichts und verspricht keine Linie', () => {
+  const ohne = layoutOf(curveOf('om-frost.json', JAN13_MS));
+  const voll = mosFor('om-frost.json', 7692);
+  const base = curveOf('om-frost.json', JAN13_MS).model;
+  // 14.01.2026 12:00 und 13:00 Berlin: zwei Stunden mitten im Fenster
+  const zwoelf = base.hours.find((h) => h.dayIdx === 2 && h.h === 12).ms;
+  const eins = { mos: voll.mos.filter(([ms]) => ms === zwoelf), mosStation: voll.mosStation };
+  assert.equal(eins.mos.length, 1);
+  const einzeln = layoutOf(curveOf('om-frost.json', JAN13_MS, eins));
+  assert.equal(einzeln.mos, false, 'ein Wert: keine Linie, die Legende sagt chartMosFar');
+  assert.equal(count(einzeln.markup, /class="chart-mos"/g), 0);
+  assert.equal(einzeln.markup, ohne.markup, 'ein einzelner Wert ändert auch die Achse nicht');
+  const zwei = { mos: voll.mos.filter(([ms]) => ms === zwoelf || ms === zwoelf + HOUR), mosStation: voll.mosStation };
+  const paar = layoutOf(curveOf('om-frost.json', JAN13_MS, zwei));
+  assert.equal(paar.mos, true);
+  const d = /class="chart-mos" d="([^"]+)"/.exec(paar.markup)[1];
+  assert.match(d, /^M[\d.]+ [\d.]+L[\d.]+ [\d.]+$/, 'ein Strich von der ersten zur zweiten Stunde: ' + d);
+});
+
+test('layout: die Stundenmarken kommen aus labels.hour(ms) (Uhrzeitform der Sprache), ohne sie die Ortsstunde', () => {
+  const c = curveOf('om-frost.json', JAN13_MS);
+  const calls = [];
+  const labels = Object.assign({}, LABELS, { hour: (ms) => { calls.push(ms); return 'U' + ms; } });
+  const eng = layoutOf(c, { width: 360, labels });
+  const mittag = eng.hs.filter((h) => h.h === 12).map((h) => h.ms);
+  assert.equal(mittag.length, 3);
+  assert.deepEqual(calls, mittag, 'hour bekommt den Zeitpunkt jeder Marke');
+  for (const ms of mittag) { assert.ok(eng.markup.includes('>U' + ms + '</text>'), 'Marke ' + ms); }
+  assert.equal(count(eng.markup, />12<\/text>/g), 0, 'keine nackte Ortsstunde, wenn hour da ist');
+  // 12-Stunden-Form wie in en: die Marke ist der Text aus labels, maskiert
+  const en = layoutOf(c, { width: 600, labels: Object.assign({}, LABELS, { hour: (ms) => (c.model.hours.find((h) => h.ms === ms).h < 12 ? '6 AM' : '6 PM') }) });
+  assert.equal(count(en.markup, />6 AM<\/text>/g), 3);
+  assert.equal(count(en.markup, />6 PM<\/text>/g), 3);
+  const bose = layoutOf(c, { labels: Object.assign({}, LABELS, { hour: () => '<i>' }) });
+  assert.ok(bose.markup.includes('&lt;i&gt;'));
+  assert.doesNotMatch(bose.markup, /<i>/);
+});
+
+test('layout: die Zahl des Tiefstwerts steht auf einem Hof in --bg (Nachtband und Fläche liegen darunter)', () => {
+  const c = curveOf('om-frost.json', JAN13_MS);
+  for (const scheme of ['dark', 'light']) {
+    const lay = layoutOf(c, { scheme });
+    const zahlen = [...lay.markup.matchAll(/<text [^>]*font-weight="700"[^>]*>/g)].map((m) => m[0]);
+    assert.ok(zahlen.length >= 2, scheme + ': Zahlen der Tiefstwerte');
+    for (const z of zahlen) {
+      assert.match(z, /stroke="var\(--bg\)"/, scheme + ': ' + z);
+      assert.match(z, /stroke-width="3"/);
+      assert.match(z, /paint-order="stroke"/, 'der Hof liegt unter der Füllung');
+      assert.match(z, /fill="oklch\(/, 'die Zahl selbst bleibt in der Temperaturfarbe');
+    }
+  }
+});
+
 test('layout: Breite klemmt auf 320 bis 720; unter 520 stehen 250 Einheiten Höhe und die 12-Uhr-Marke, darüber 280 und 6 und 18', () => {
   const c = curveOf('om-frost.json', JAN13_MS);
   for (const [width, W] of [[100, 320], [320, 320], [361.4, 361], [719, 719], [5000, 720], [undefined, 720], [null, 720], [NaN, 720], ['400', 720], [-5, 720]]) {

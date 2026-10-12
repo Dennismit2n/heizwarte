@@ -546,6 +546,17 @@ test('Mehr anzeigen: app.js verdrahtet Klick, hw:more, Beschriftung und Fokus; L
   assert.match(code, /if \(open\) \{\s*guard\(\(\) => renderAir\(view\)\);\s*guard\(\(\) => renderChart\(view\)\);\s*\} else \{\s*\$\('air'\)\.hidden = true;\s*unbindChart\(\);/);
   // render() zeichnet den Knopf mit; Sprachwechsel läuft über render() (onLanguage)
   assert.match(code, /guard\(\(\) => renderMore\(view\)\);/);
+  // Knopf und Blöcke nur, wenn es etwas aufzuklappen gibt (canExpand; Review M3 Runde 3, N4 und N6); hw:more bleibt
+  const more = code.slice(code.indexOf('function renderMore('), code.indexOf('function onMore('));
+  assert.match(more, /const has = canExpand\(view, view \? guard\(\(\) => chart\.summary\(view\.m, view\.v\)\) : null\);/);
+  assert.match(more, /const open = state\.more && has;/);
+  assert.match(more, /btn\.hidden = !has;/);
+  assert.doesNotMatch(more, /persist\(|forget\(|storage\./, 'renderMore schreibt hw:more nie');
+});
+
+test('Warnungen: der Sprachhinweis hängt an alertLangHint (zwölf Sprachen, nicht de und en)', () => {
+  assert.match(appCode, /\$\('alertLang'\)\.hidden = !any \|\| !alertLangHint\(i18n\.lang\);/);
+  assert.match(funktion(appCode, 'alertLangHint'), /return lang !== 'de' && lang !== 'en';/);
 });
 
 test('Mehr anzeigen: Schlüssel in de, CSS mit 56-px-Knopf über die ganze Breite und Rahmen für das beste Fenster', () => {
@@ -731,6 +742,13 @@ test('Neu laden: Knopf mit aria-disabled statt disabled, Klick hängt sich an de
   // „Neu laden“ ruft immer ab (force) und nimmt einen laufenden Abruf mit
   assert.match(appCode, /on\('reload', 'click', \(\) => \{ refresh\(true\); \}\)/);
   assert.match(funktion(appCode, 'refresh'), /if \(inflight\.has\(id\)\) \{[\s\S]*return inflight\.get\(id\);/);
+  // Höhe je laufendem Abruf: weicht die Höhe des Orts inzwischen ab, folgt nach dem Abruf ein neuer (Review M3 Runde 3, N7)
+  assert.match(funktion(appCode, 'refresh'), /inflightElev\.set\(id, place\.elev\);\s*state\.status = 'loading';/);
+  assert.match(funktion(appCode, 'refresh'),
+    /if \(inflightElev\.get\(id\) !== place\.elev\) \{\s*return inflight\.get\(id\)\.then\(\(\) => \(state\.activeId === id \? refresh\(true\) : undefined\)\);/);
+  assert.match(funktion(appCode, 'fetchFor'), /inflight\.delete\(id\);\s*inflightElev\.delete\(id\);/);
+  const hoehe = funktion(appCode, 'onElevCommit');
+  assert.equal((hoehe.match(/refresh\(/g) || []).length, 1, 'die Höhe ruft refresh(true) genau einmal; den Nachlauf übernimmt refresh()');
   assert.match(css, /button\[aria-disabled="true"\]\s*\{/);
 });
 
@@ -1257,13 +1275,19 @@ test('CSS der Kurve: waagerechtes Ziehen gehört der Kurve, senkrechtes der Seit
 
 test('app.js: die Kurve wird nur gezeichnet, solange sie offen ist, baut die alte Bindung ab und setzt Breite, viewBox und aria-label', () => {
   const code = appCode;
-  // renderChart: Definition, der Aufruf in renderMore (im offenen Zweig) und der in onResize
-  assert.equal((code.match(/renderChart\(/g) || []).length, 3);
+  // renderChart: Definition, der Aufruf in renderMore (im offenen Zweig), der in onResize und der in showMain, der das
+  // Zeichnen bei verborgenem Hauptbildschirm nachholt (Review M3 Runde 3, Befund 1 und 2)
+  assert.equal((code.match(/renderChart\(/g) || []).length, 4);
   const draw = funktion(code, 'renderChart');
   assert.match(draw, /^function renderChart\(view\) \{\s*const box = \$\('chart'\);\s*unbindChart\(\);/, 'zuerst die alte Bindung abbauen');
   assert.match(draw, /chart\.summary\(view\.m, view\.v\)/);
-  assert.match(draw, /box\.hidden = true;/, 'ohne Fenster entfällt der Block');
+  assert.match(draw, /box\.hidden = true;\s*chartPending = false;/, 'ohne Fenster entfällt der Block');
   assert.match(draw, /width: svg\.parentElement\.clientWidth/);
+  // ohne gemessene Breite (Hauptbildschirm verborgen) kein Rückfall auf 720: nicht zeichnen, merken, nachholen
+  assert.match(draw, /if \(svg\.parentElement\.clientWidth === 0\) \{\s*chartPending = true;\s*return;\s*\}\s*chartPending = false;\s*const lay = chart\.layout\(/);
+  const main = funktion(code, 'showMain');
+  assert.match(main, /render\(\);\s*showScreen\('s-main', \{ focus: !!o\.focusNow \}\);\s*if \(state\.more && chartPending\) \{ guard\(\(\) => renderChart\(guard\(buildView\)\)\); \}/,
+    'erst sichtbar schalten, dann die wartende Kurve zeichnen');
   assert.match(draw, /scheme: currentScheme\(\)/);
   assert.match(draw, /const lay = chart\.layout\(view\.m, view\.v, view\.now, \{/);
   assert.match(draw, /svg\.setAttribute\('viewBox', '0 0 ' \+ lay\.W \+ ' ' \+ lay\.H\);/);
@@ -1306,6 +1330,7 @@ test('app.js: Beschriftungen und Formatierer der Kurve kommen aus i18n und der O
   assert.match(labels, /tomorrow: t\('dayTomorrow'\)/);
   assert.match(labels, /now: t\('chartNow'\)/);
   assert.match(labels, /wday: \(ms\) => f\.wday\(ms, tz, i18n\.lang, true\)/, 'langer Wochentag für den dritten Tag');
+  assert.match(labels, /hour: \(ms\) => f\.time\(ms, tz\)/, 'Stundenmarken in der Uhrzeitform der Sprache und der Ortszeit');
   const tip = funktion(appCode, 'chartTipFmt');
   assert.match(tip, /time: \(ms\) => f\.time\(ms, tz\)/);
   assert.match(tip, /wday: \(ms\) => f\.wday\(ms, tz, i18n\.lang, false\)/, 'kurzer Wochentag im Kasten');

@@ -1036,6 +1036,9 @@
   // je Ort-Id). Ein Abruf kann mit dem 429-Wiederholversuch über eine Minute dauern: eine globale Sperre hielte
   // den Ortswechsel so lange fest, und die Daten des alten Orts erschienen unter dem Namen des neuen.
   const inflight = new Map();
+  // Die Höhe, mit der der laufende Abruf je Ort-Id fragt (sie steckt in der Forecast-URL). Weicht die Höhe des Orts
+  // inzwischen ab, hängt refresh() nach dem Abruf einen neuen an, statt nur auf den alten zu warten.
+  const inflightElev = new Map();
   // Ende der Wartezeit nach dem ersten 429 je Ort-Id (ms der Geräteuhr), solange der Abruf läuft. Wechselt man in der
   // Wartezeit weg und wieder zurück, steht wieder statusWaiting mit der Restzeit da und nicht „Wird aktualisiert“.
   const waitingUntil = new Map();
@@ -1143,6 +1146,7 @@
       failure = e;
     }
     inflight.delete(id);
+    inflightElev.delete(id);
     waitingUntil.delete(id);
     guard(() => {
       renderReload();
@@ -1154,16 +1158,23 @@
   // neuer Ort, neue Höhe). Gibt das Versprechen des laufenden Abrufs zurück; es wird nie abgelehnt.
   function refresh(force) {
     const id = state.activeId;
-    if (!id || !placeById(id)) { return Promise.resolve(); }
+    const place = placeById(id);
+    if (!id || !place) { return Promise.resolve(); }
     if (inflight.has(id)) {
       // Zurück an einen Ort gewechselt, dessen Abruf noch läuft: die Statuszeile kennt den Zustand noch nicht
       if (state.status === null) {
         state.status = 'loading';
         guard(renderStatus);
       }
+      // Der laufende Abruf fragt noch mit der alten Höhe (geändert, während er lief, auch über einen Ortswechsel
+      // hinweg): danach noch einmal, sofern der Ort dann noch aktiv ist
+      if (inflightElev.get(id) !== place.elev) {
+        return inflight.get(id).then(() => (state.activeId === id ? refresh(true) : undefined));
+      }
       return inflight.get(id);
     }
     if (!force && Date.now() - state.lastFetchMs < THROTTLE_MS) { return Promise.resolve(); }
+    inflightElev.set(id, place.elev);
     state.status = 'loading';
     const job = fetchFor(id);
     inflight.set(id, job);
@@ -1555,6 +1566,12 @@
     return { eligible, failed: eligible && de && status === 'error' };
   }
 
+  // Der Hinweis „nur auf Englisch“ (alertLangHint) gehört zu den zwölf Sprachen, die die _en-Felder zeigen, ohne selbst
+  // Englisch zu sein (Abschnitt 8, Block 5): nicht in de (eigene Texte) und nicht in en (dort ist Englisch die Sprache)
+  function alertLangHint(lang) {
+    return lang !== 'de' && lang !== 'en';
+  }
+
   // Warnungen: nur in Deutschland oder wenn die Abfrage Warnungen geliefert hat; es zählen die noch gültigen.
   // Ohne Warnung und ohne Abruffehler bleibt der Block weg.
   function renderAlerts(view) {
@@ -1572,7 +1589,7 @@
     }
     const any = !!box.firstChild;
     $('alerts').hidden = !(any || failed);
-    $('alertLang').hidden = !any || i18n.lang === 'de';
+    $('alertLang').hidden = !any || !alertLangHint(i18n.lang);
     $('alertSource').hidden = !any;
     $('alertUnavailable').hidden = !failed;
   }
@@ -1904,7 +1921,8 @@
     };
   }
 
-  // Beschriftungen in der Zeichnung der Kurve (chart.layout): Tagesnamen, „jetzt“ und der lange Wochentag für den dritten Tag
+  // Beschriftungen in der Zeichnung der Kurve (chart.layout): Tagesnamen, „jetzt“, der lange Wochentag für den dritten Tag
+  // und die Uhrzeit der Stundenmarken (Ortszeit, 12 oder 24 Stunden wie die Sprache, mit Minuten wie überall)
   function chartLabels(view) {
     const f = i18n.fmt;
     const tz = view.m.tz;
@@ -1912,7 +1930,8 @@
       today: t('dayToday'),
       tomorrow: t('dayTomorrow'),
       now: t('chartNow'),
-      wday: (ms) => f.wday(ms, tz, i18n.lang, true)
+      wday: (ms) => f.wday(ms, tz, i18n.lang, true),
+      hour: (ms) => f.time(ms, tz)
     };
   }
 
@@ -1955,19 +1974,32 @@
     }
   }
 
+  // true, solange die Kurve auf ihre Breite wartet: renderChart() lief bei verborgenem Hauptbildschirm (showMain holt
+  // das Zeichnen nach showScreen('s-main') nach)
+  let chartPending = false;
+
   // Die Kurve (Block 9): wird nur gezeichnet, solange der Block offen ist (renderMore und onResize rufen nur dann).
   // Breite = Breite der Spalte; die Zeichnung ist ein SVG-String aus chart.layout() (nur Zahlen und eigene Texte), der
   // Satz darunter ist zugleich das aria-label des Bildes. Ohne Fenster (zu alte Daten) entfällt der Block.
+  // Ist der Hauptbildschirm verborgen (Einstellungen offen, App-Start, Abruf oder Ortswechsel per Radio im Hintergrund),
+  // misst die Spalte 0, und chart.layout() fiele auf 720 zurück: am Handy eine gestauchte Zeichnung mit Schrift um 5 px.
+  // Dann wird nicht gezeichnet; das alte Bild bleibt unsichtbar stehen, bis showMain() nach dem Sichtbarschalten zeichnet.
   function renderChart(view) {
     const box = $('chart');
     unbindChart();
     const sum = view ? chart.summary(view.m, view.v) : null;
     if (!view || !sum) {
       box.hidden = true;
+      chartPending = false;
       return;
     }
     box.hidden = false;
     const svg = $('chartSvg');
+    if (svg.parentElement.clientWidth === 0) {
+      chartPending = true;
+      return;
+    }
+    chartPending = false;
     const lay = chart.layout(view.m, view.v, view.now, {
       width: svg.parentElement.clientWidth,
       scheme: currentScheme(),
@@ -1996,17 +2028,27 @@
     }, RESIZE_MS);
   }
 
+  // Gibt es hinter „Mehr anzeigen“ etwas aufzuklappen? Die Kurve braucht ein Fenster (sum = chart.summary(), null ohne
+  // Ampel-Tage), das Lüften den heutigen Tag im Modell (wie airRows). Bei zu alten Daten fehlt beides.
+  function canExpand(view, sum) {
+    if (!view || !view.m) { return false; }
+    if (sum) { return true; }
+    const key = view.now ? view.now.key : null;
+    return Array.isArray(view.m.days) && view.m.days.some((d) => d.key === key);
+  }
+
   // „Mehr anzeigen“ / „Weniger anzeigen“: der Knopf bleibt derselbe, nur Beschriftung und aria-expanded wechseln (und
-  // nur, wenn sich etwas ändert, damit ein Neuzeichnen beim Abruf nichts erneut vorliest). Ohne Daten gibt es nichts
-  // aufzuklappen: Knopf und beide Blöcke entfallen, hw:more bleibt davon unberührt.
+  // nur, wenn sich etwas ändert, damit ein Neuzeichnen beim Abruf nichts erneut vorliest). Ohne Daten oder mit zu alten
+  // Daten gibt es nichts aufzuklappen (canExpand): Knopf und beide Blöcke entfallen, hw:more bleibt davon unberührt.
   function renderMore(view) {
     const btn = $('more');
-    const open = state.more && !!view;
+    const has = canExpand(view, view ? guard(() => chart.summary(view.m, view.v)) : null);
+    const open = state.more && has;
     const label = t(state.more ? 'btnLess' : 'btnMore');
     if (btn.textContent !== label) { btn.textContent = label; }
     const expanded = state.more ? 'true' : 'false';
     if (btn.getAttribute('aria-expanded') !== expanded) { btn.setAttribute('aria-expanded', expanded); }
-    btn.hidden = !view;
+    btn.hidden = !has;
     $('chart').hidden = !open;
     if (open) {
       guard(() => renderAir(view));
@@ -2268,12 +2310,8 @@
     if (place.id !== state.activeId) { return; }
     if (parsed.kind === 'empty' && !$('settingsElevEdit').hidden) { input.value = patch.elev === null ? '' : String(patch.elev); }
     renderSettingsElev();
-    // Lief schon ein Abruf mit der alten Höhe, hängt sich refresh() nur an ihn an: danach noch einmal
-    const running = inflight.has(place.id);
-    const job = refresh(true);
-    if (running) {
-      job.then(() => { if (state.activeId === place.id) { refresh(true); } });
-    }
+    // Läuft schon ein Abruf mit der alten Höhe, hängt refresh() danach einen neuen an (inflightElev)
+    refresh(true);
   }
 
   // Ortswechsel per Radio: derselbe Weg wie der Umschalter im Kopf (hw:active, Cache zeigen, refresh(true))
@@ -2573,6 +2611,8 @@
     state.activeId = state.place.id;
     render();
     showScreen('s-main', { focus: !!o.focusNow });
+    // render() lief bei verborgenem Hauptbildschirm: die offene Kurve hatte keine Breite und wird jetzt gezeichnet
+    if (state.more && chartPending) { guard(() => renderChart(guard(buildView))); }
   }
 
   // Die Heizart eines schon gespeicherten Orts nachtragen: S5 ohne Zähler, „Fertig“ führt zurück
@@ -2740,14 +2780,15 @@
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
   // afterDelete, cleanLabel), die Ortsliste
   // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher), die Lüftungsfenster (airRows), die Texte der Kurve
-  // (chartRows), die Bedingung des Warnblocks (alertsGate) und das Theme
+  // (chartRows), die Bedingung des Warnblocks (alertsGate) und seines Sprachhinweises (alertLangHint), ob „Mehr anzeigen“
+  // etwas aufzuklappen hat (canExpand), und das Theme
   // (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate,
+      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate, alertLangHint, canExpand,
       THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
     };
   }
