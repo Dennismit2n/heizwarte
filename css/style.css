@@ -482,6 +482,16 @@ select {
   border-radius: 0.75rem;
 }
 
+/* Statuszeile (Abschnitt 8, Block 2): der Stand in der Zweitfarbe; „⚠ Veraltet“ trägt Symbol und Wort, die Farbe
+   kommt nur dazu */
+#status {
+  color: var(--muted);
+}
+
+#status .status-warn {
+  color: var(--warn);
+}
+
 /* Jetzt: die Temperatur trägt die Farbe der Außentemperatur (--t), der Rest bleibt in Textfarben */
 .now {
   display: flex;
