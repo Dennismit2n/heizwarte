@@ -891,8 +891,10 @@ select {
 
 /* ---------------------------------------------------------------------------------------------
    Mehr anzeigen (Abschnitt 8, Blöcke 8 bis 10): ein Knopf über die ganze Breite, 56 px hoch; darunter, erst nach dem
-   Druck, die Kurve (Gerüst) und das Lüften. Der Zustand steht im Wort („Mehr“ oder „Weniger anzeigen“) und in
+   Druck, die Kurve und das Lüften. Der Zustand steht im Wort („Mehr“ oder „Weniger anzeigen“) und in
    aria-expanded, nie in einem Pfeil allein. Das beste Lüftungsfenster trägt sein Wort im Rahmen.
+   Die Kurve selbst ist ein SVG, das chart.js baut; ihre Farben kommen aus den Variablen --chart-* und --t (je Theme),
+   die Schrift in der Zeichnung ist in Zeichnungseinheiten gesetzt (font-size am <svg>), damit sie mit der Kurve skaliert.
    --------------------------------------------------------------------------------------------- */
 
 .more-btn {
@@ -913,10 +915,139 @@ select {
   display: none;
 }
 
+.chart-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--muted);
+}
+
+/* Farbmuster vor dem Legendentext, rein dekorativ: der Text daneben sagt dasselbe */
+.legend-swatch {
+  flex: none;
+  display: inline-block;
+  width: 1.5rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+}
+
+.legend-swatch.is-main {
+  background: var(--t);
+}
+
+.legend-swatch.is-second {
+  background: repeating-linear-gradient(90deg, var(--chart-mos) 0 0.25rem, transparent 0.25rem 0.4375rem);
+}
+
+.legend-swatch.is-rain {
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-inline: 0.4375rem;
+  background: var(--chart-rain);
+}
+
+.chart-wrap {
+  position: relative;
+}
+
+/* pan-y: senkrecht scrollt die Seite weiter, waagerechtes Ziehen führt den Zeiger über die Kurve */
 .chart-svg {
   display: block;
   width: 100%;
   height: auto;
+  touch-action: pan-y;
+  font-family: var(--body);
+}
+
+/* Kasten über der Kurve beim Berühren; die Lage links setzt chart.js per CSSOM */
+.chart-tip {
+  position: absolute;
+  top: 0.375rem;
+  left: 0;
+  transform: translateX(-50%);
+  min-width: 9.5rem;
+  max-width: calc(100% - 0.5rem);
+  box-sizing: border-box;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 0.875rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.chart-tip b {
+  font: 700 1.125rem var(--display);
+}
+
+.chart-tip-head,
+.chart-tip-line,
+.chart-tip-feels {
+  color: var(--muted);
+}
+
+.chart-tip-feels {
+  margin-inline-start: 0.5rem;
+}
+
+/* Farbskala unter der Kurve: der Verlauf kommt aus chart.scaleCss() (app.js setzt ihn per CSSOM), die Marken stehen auf
+   ihrer Temperatur (−10 bis 32 Grad über die ganze Breite) */
+.scale-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.scale {
+  height: 0.625rem;
+  border-radius: 99px;
+}
+
+.scale-labels {
+  position: relative;
+  height: 1.25rem;
+  color: var(--faint);
+  font-size: 0.75rem;
+}
+
+.scale-labels span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.scale-labels span:nth-child(1) {
+  left: 0;
+  transform: none;
+}
+
+.scale-labels span:nth-child(2) {
+  left: 23.81%;
+}
+
+.scale-labels span:nth-child(3) {
+  left: 47.62%;
+}
+
+.scale-labels span:nth-child(4) {
+  left: 66.67%;
+}
+
+.scale-labels span:nth-child(5) {
+  left: 83.33%;
+}
+
+.scale-labels span:nth-child(6) {
+  left: 100%;
+  transform: translateX(-100%);
 }
 
 .air-list {
