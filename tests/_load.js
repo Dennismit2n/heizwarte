@@ -2,8 +2,9 @@
  * Heizwarte — Testlader: zieht die klassischen Skripte in der Reihenfolge von index.html herein
  * und gibt globalThis.Heizwarte zurück (Muster: ohnespur/tests/_load.js). Noch nicht gebaute
  * Dateien werden übersprungen und einmal auf stderr genannt, damit Teiltests schon vor dem
- * Vollausbau laufen. boot.js und app.js laden die Tests nie: boot.js braucht ein DOM, und
- * app.js ist die einzige Datei, die beim Laden etwas tut.
+ * Vollausbau laufen. boot.js und app.js lädt dieser Lader nie: boot.js braucht ein DOM, und
+ * app.js ist die einzige Datei, die beim Laden etwas tut. tests/app.test.js lädt app.js selbst
+ * (in Node ohne document tut sie nichts) und benutzt ihren Export der reinen Zeilenfunktionen.
  */
 'use strict';
 
