@@ -261,12 +261,14 @@ test('app.js: jede ID, die der Code anfasst, steht im Markup', () => {
 test('app.js: jeder Schlüssel, den der Code als Zeichenkette nennt, steht in de', () => {
   const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
   const keys = new Set();
-  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now|level|alert|day|reason|charge|plan)[A-Z]\w*)'/g;
+  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now|level|alert|day|reason|charge|plan|strength)[A-Z]\w*)'/g;
   let m;
   while ((m = re.exec(code)) !== null) { keys.add(m[1]); }
   for (const k of ['setupSearching', 'setupSearch', 'setupByLocation', 'setupConfirmYes', 'errNeedPlace', 'errNoHit', 'errElevRange', 'hitHouse',
     'levelTitle0', 'levelText0', 'levelOf', 'levelNoData', 'chargeTonight', 'chargeHigh', 'planNow', 'planToday', 'planDay',
-    'reasonNightMin', 'alertFrom', 'alertUntil', 'dayToday', 'dayColder', 'daySame', 'nowFeels', 'nowNightMin']) {
+    'reasonNightMin', 'alertFrom', 'alertUntil', 'dayToday', 'dayColder', 'daySame', 'nowFeels', 'nowNightMin',
+    'planFor', 'planTitle', 'planTitleStorage', 'planNightOf', 'planStart', 'planDue', 'planOptional', 'planDisagree', 'planGusty',
+    'planNightMin', 'planLead', 'planChargeEvening', 'strengthThrough', 'strengthLow', 'profileRadiator', 'profileStorage']) {
     assert.ok(keys.has(k), 'Prüfer erkennt ' + k + ' nicht');
   }
   // Namen wie 'btnSearch' sind Element-IDs und stehen im Markup; alles andere muss ein Schlüssel sein
@@ -295,11 +297,11 @@ test('Heizart-Karten nennen Namen und Laiensatz aus den profile*-Schlüsseln', (
 });
 
 // ---------------------------------------------------------------------------------------------
-// Hauptbildschirm: Kopf, Jetzt, Ampel, Warnungen, Tage (BAUPLAN Abschnitt 8, Blöcke 1 und 3 bis 6)
+// Hauptbildschirm: Kopf, Jetzt, Ampel, Warnungen, Tage, Fahrplan (BAUPLAN Abschnitt 8, Blöcke 1 und 3 bis 7)
 // ---------------------------------------------------------------------------------------------
 
 test('Hauptbildschirm: Blöcke in der Reihenfolge des Plans, Screenreader-Reihenfolge = DOM-Reihenfolge', () => {
-  const folge = ['placeName', 'placePick', 'reload', 'settingsBtn', 'heatHint', 'status', 'now', 'verdict', 'alerts', 'days'];
+  const folge = ['placeName', 'placePick', 'reload', 'settingsBtn', 'heatHint', 'status', 'now', 'verdict', 'alerts', 'days', 'plan'];
   const slice = screenSlice('s-main');
   let letzte = -1;
   for (const id of folge) {
@@ -309,7 +311,7 @@ test('Hauptbildschirm: Blöcke in der Reihenfolge des Plans, Screenreader-Reihen
   }
   // Überschriften des Hauptbildschirms: h2 je Block, keine Stufe übersprungen (die h3 der Karten entstehen in app.js)
   const ebenen = tags(slice).filter((tg) => /^h[1-6]$/.test(tg.name));
-  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h2', 'h2', 'h2']);
+  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h2', 'h2', 'h2', 'h2']);
   assert.equal(ebenen[0].attrs.tabindex, '-1');
   assert.equal(byId.get('verdictTitle').name, 'h2');
 });
@@ -357,6 +359,79 @@ test('Jetzt, Ampel, Warnungen, Tage: die Bausteine, die app.js füllt, stehen im
   assert.equal(byId.get('alertUnavailable').attrs['data-i18n'], 'alertUnavailable');
   assert.match(slice, /<h2 data-i18n="alertTitle">/);
   assert.match(slice, /<h2 data-i18n="daysTitle">/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Heizfahrplan (BAUPLAN Abschnitt 8, Block 7)
+// ---------------------------------------------------------------------------------------------
+
+test('Fahrplan: Block steht nach den Tagen, Überschrift und Liste füllt app.js, bis dahin verborgen', () => {
+  const plan = byId.get('plan');
+  assert.equal(plan.name, 'section');
+  assert.equal(plan.attrs.hidden, '');
+  const head = byId.get('planHead');
+  assert.equal(head.name, 'h2');
+  assert.equal(head.attrs['data-i18n'], undefined, 'die Überschrift trägt einen Platzhalter und kommt aus app.js (planFor)');
+  assert.equal(byId.get('planList').name, 'ul');
+  const slice = screenSlice('s-main');
+  assert.ok(slice.indexOf('id="days"') < slice.indexOf('id="plan"'), 'Fahrplan nach den drei Tagen');
+  assert.ok(slice.indexOf('id="plan"') < slice.indexOf('id="planHead"') && slice.indexOf('id="planHead"') < slice.indexOf('id="planList"'));
+});
+
+test('Fahrplan: Schlüssel in de, Satzteile ohne Punkt, planDisagree ohne Richtung', () => {
+  const ph = (text) => Array.from(new Set(Array.from(text.matchAll(/\{(\w+)\}/g)).map((m) => m[1]))).sort();
+  assert.deepEqual(ph(de.planNightMin), ['t', 'time']);
+  assert.deepEqual(ph(de.planLead), ['lead', 'onset']);
+  assert.deepEqual(ph(de.planChargeEvening), ['level']);
+  assert.deepEqual(ph(de.planDisagree), ['t']);
+  for (const k of ['planNow', 'planToday', 'planDay']) { assert.doesNotMatch(de[k], /\.$/, k + ' ist ein Satzteil'); }
+  // Die Bedingung löst in beide Richtungen aus (PlanEntry.disagree kennt keine): der Satz darf keine nennen
+  assert.doesNotMatch(de.planDisagree, /kälter|wärmer|milder|höher|niedriger|tiefer|mehr|weniger/i);
+  assert.match(de.planDisagree, /zweite Meinung/);
+  // Aufheizzeit, nicht Vorlauf (Abschnitt 3), und kein Fahrplantext nennt Fliesen oder Fußboden
+  assert.match(de.planLead, /Aufheizzeit/);
+});
+
+test('Fahrplan: app.js verdrahtet Überschrift, Stärken, MOSMIX-Regel und Ortszeit', () => {
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+  // eine Überschrift je Heizart, der Nachtspeicher heißt „Aufladung“
+  for (const [type, key] of [['radiator', 'profileRadiator'], ['floorScreed', 'profileFloorScreed'], ['floorDry', 'profileFloorDry'],
+    ['heatpumpFloor', 'profileHeatpumpFloor'], ['storage', 'profileStorage']]) {
+    assert.ok(code.includes(type + ": '" + key + "'"), 'PROFILE_KEY ' + type);
+    assert.ok(has(de, key), key);
+  }
+  assert.match(code, /type === 'storage'\) \{ return t\('planTitleStorage'\)/);
+  assert.match(code, /t\('planFor', \{ profile: t\(PROFILE_KEY\[type\]\) \}\)/);
+  for (const [stufe, key] of [['through', 'strengthThrough'], ['up', 'strengthUp'], ['normal', 'strengthNormal'], ['low', 'strengthLow']]) {
+    assert.ok(code.includes(stufe + ": '" + key + "'"), 'STRENGTH_KEY ' + stufe);
+  }
+  // MOSMIX: nur mit Station innerhalb 25 km (Meter), und nur dann der Satz
+  assert.match(code, /MOS_NEAR_M = 25000;/);
+  assert.match(code, /s\.distance <= MOS_NEAR_M/);
+  assert.match(code, /entry\.disagree && mosNear\(view\.m\) && isNum\(night\.mosMin\)/);
+  // Start fällig nach heat.isDue, Handlungssatz und Fahrplan lesen denselben verdict.plan
+  assert.match(code, /heat\.isDue\(entry, view\.now\.ms, night\.toMs\)/);
+  assert.match(code, /v\.plan\.forEach\(\(entry, k\) =>/);
+  assert.match(code, /function planPick\(view\)\s*\{[^}]*view\.v\.plan\[/);
+  assert.match(code, /const entry = planPick\(view\);/, 'der Handlungssatz der Ampel nimmt planPick');
+  // render: Fahrplan nach den Tagen, jeder Block für sich im guard
+  assert.ok(code.indexOf('guard(() => renderDays(view));') < code.indexOf('guard(() => renderPlan(view));'));
+  // Zeiten nur über fmt mit der Zeitzone des Orts, nie über die Gerätezeit
+  const plan = code.slice(code.indexOf('function upFirst'), code.indexOf('function render()'));
+  assert.ok(plan.length > 1500, 'Fahrplan-Code nicht gefunden');
+  assert.doesNotMatch(plan, /new Date|getHours|getMinutes|toLocaleTimeString|toLocaleDateString|Intl\./);
+  assert.match(plan, /f\.time\(entry\.startMs, tz\)/);
+  assert.match(plan, /weather\.dayKeyOf\(entry\.startMs, tz\)/);
+  assert.match(plan, /f\.time\(night\.atMs, tz\)/);
+  assert.match(plan, /f\.time\(entry\.onsetMs, tz\)/);
+  assert.equal(plan.includes('view.m.tz'), true);
+});
+
+test('Fahrplan: CSS-Karte je Nacht, Hinweis im Rahmen statt nur in Farbe', () => {
+  assert.match(css, /\.plan\s*\{[^}]*list-style: none;/);
+  assert.match(css, /\.plan-item\s*\{[^}]*background: var\(--surface\);/);
+  assert.match(css, /\.plan-tag\s*\{[^}]*border: 2px solid var\(--edge\);/);
+  assert.match(css, /\.plan-when\s*\{[^}]*font-size: 1\.375rem;/);
 });
 
 test('Einstellungen: der Weg zurück ist da, kein Bildschirm ohne Ausgang', () => {
