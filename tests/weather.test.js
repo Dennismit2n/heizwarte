@@ -619,6 +619,16 @@ test('load: 404 „not covered“ ist outside ohne Problem, die Warnungen bleibe
   assert.deepEqual(problems, []);
 });
 
+test('load: nur die 404 mit „not covered“ ist outside; jede andere 404 (leer, Proxy, anderer Text) ist ein Fehler', async () => {
+  for (const body of [undefined, 'Not Found', { detail: 'Not Found' }, { detail: 'No sources match your criteria' }]) {
+    const f = dienste({ '/alerts?': { status: 404, body } });
+    const { cache, problems } = await weather.load(BUERG, { fetchImpl: f, nowMs: BUERG_NOW_MS });
+    assert.equal(cache.alertsStatus, 'error', JSON.stringify(body));
+    assert.equal(cache.alerts, null);
+    assert.deepEqual(problems, ['alertsFailed']);
+  }
+});
+
 test('load: ein gescheiterter Warn-Abruf ist error mit Problem alertsFailed, Wetter und MOSMIX bleiben', async () => {
   for (const antwort of [{ status: 500 }, { status: 503, body: 'Wartung' }, { throws: true }, { status: 200, body: 'kein JSON' },
     { status: 200, body: { alerts: 'viele' } }]) {

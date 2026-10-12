@@ -1543,14 +1543,27 @@
     return item;
   }
 
+  // Wann darf der Warnblock etwas zeigen (Abschnitt 8, Block 5)? Nur in Deutschland oder wenn die Abfrage wirklich
+  // Warnungen geliefert hat (status 'ok'; das trifft einen Ort mit unbekanntem Land, den weather.bsUrls() mitfragt).
+  // Außerhalb Deutschlands fragt die App gar nicht (status 'outside'), und auch ein 404 „not covered“ ist 'outside'
+  // und kein Fehler. Nur ein deutscher Ort meldet einen gescheiterten Abruf ('error' → alertUnavailable).
+  //   eligible  Block und Warnungen dürfen erscheinen
+  //   failed    der Hinweis „Warnungen nicht erreichbar“ steht
+  function alertsGate(place, status) {
+    const de = !!place && place.cc === 'DE';
+    const eligible = !!place && (de || status === 'ok');
+    return { eligible, failed: eligible && de && status === 'error' };
+  }
+
   // Warnungen: nur in Deutschland oder wenn die Abfrage Warnungen geliefert hat; es zählen die noch gültigen.
   // Ohne Warnung und ohne Abruffehler bleibt der Block weg.
   function renderAlerts(view) {
     const place = state.place;
     const status = state.cache ? state.cache.alertsStatus : null;
-    const eligible = !!view && !!place && (place.cc === 'DE' || status === 'ok');
+    const gate = alertsGate(place, status);
+    const eligible = !!view && gate.eligible;
     const list = eligible ? heat.activeAlerts(view.m.alerts, view.now.ms) : [];
-    const failed = eligible && place.cc === 'DE' && status === 'error';
+    const failed = !!view && gate.failed;
     const box = $('alertList');
     box.replaceChildren();
     for (const a of list) {
@@ -2727,14 +2740,15 @@
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
   // afterDelete, cleanLabel), die Ortsliste
   // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher), die Lüftungsfenster (airRows), die Texte der Kurve
-  // (chartRows) und das Theme
+  // (chartRows), die Bedingung des Warnblocks (alertsGate) und das Theme
   // (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
+      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate,
+      THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
