@@ -12,6 +12,8 @@
  * (extentLine) ohne feste Einheit und die Hausnummer (extractNumber) mit „12/1“ und „5-7“.
  * Am Ende die Regeln der Einstellungen (BAUPLAN Abschnitt 7 und 8): Stepper-Grenzen und Schrittweite, leadMin ≤ leadMax,
  * die Höhenregel (Zahl von Hand, leer automatisch, ungültig nichts), Löschen mit Nachrücken und der Ortsname.
+ * Zuletzt die Regeln der Ortsliste (BAUPLAN Abschnitt 4, 6 und 8): höchstens fünf Orte, der aktive Ort, wenn
+ * hw:active fehlt oder ins Leere zeigt, und wann der Umschalter im Kopf steht.
  */
 'use strict';
 
@@ -23,7 +25,8 @@ const path = require('node:path');
 const Heizwarte = require('./_load.js');
 const {
   verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
-  STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel
+  STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel,
+  MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
 } = require('../js/app.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
@@ -1026,4 +1029,64 @@ test('cleanLabel: getrimmt, auf 40 Zeichen gekürzt, leer behält den alten Name
   assert.equal(cleanLabel('a'.repeat(39) + ' b', 'Opa'), 'a'.repeat(39));
   assert.equal(Array.from(cleanLabel('😀'.repeat(45), 'Opa')).length, 40);
   assert.equal(cleanLabel('Winnenden-Bürg', 'Opa'), 'Winnenden-Bürg');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Ortsliste: Maximum, aktiver Ort, Umschalter
+// ---------------------------------------------------------------------------------------------
+
+function orte(n) {
+  return Array.from({ length: n }, (_, i) => ({ id: 'ort' + i, label: 'Ort ' + i }));
+}
+
+test('canAddPlace: bis zu vier Orte darf einer dazukommen, bei fünf nicht; das Maximum ist 5', () => {
+  assert.equal(MAX_PLACES, 5);
+  for (let n = 0; n <= 4; n++) { assert.equal(canAddPlace(orte(n)), true, n + ' Orte'); }
+  assert.equal(canAddPlace(orte(5)), false);
+  assert.equal(canAddPlace(orte(6)), false, 'auch eine überlange Liste bekommt keinen Ort mehr');
+  assert.equal(canAddPlace(null), false);
+  assert.equal(canAddPlace(undefined), false);
+});
+
+test('appendPlace: hängt hinten an und lässt die alte Liste unberührt; der sechste Ort wird abgelehnt', () => {
+  const eins = orte(1);
+  const neu = { id: 'neu', label: 'Neu' };
+  const zwei = appendPlace(eins, neu);
+  assert.deepEqual(zwei.map((p) => p.id), ['ort0', 'neu'], 'neuer Ort am Ende (Reihenfolge = Umschalter)');
+  assert.equal(eins.length, 1, 'die Eingabe bleibt unberührt');
+  assert.notEqual(zwei, eins);
+
+  let liste = [];
+  for (let i = 0; i < 5; i++) { liste = appendPlace(liste, { id: 'x' + i }); assert.ok(liste, 'Ort ' + (i + 1)); }
+  assert.equal(liste.length, 5);
+  assert.equal(appendPlace(liste, { id: 'sechs' }), null, 'ein sechster Ort ist unmöglich');
+  assert.equal(liste.length, 5);
+  assert.equal(appendPlace(null, neu), null);
+});
+
+test('resolveActive: hw:active gilt, solange es den Ort gibt, sonst der erste Ort, ohne Ort null', () => {
+  const liste = orte(3);
+  assert.equal(resolveActive(liste, 'ort2'), 'ort2');
+  assert.equal(resolveActive(liste, 'ort0'), 'ort0');
+  assert.equal(resolveActive(liste, 'geloescht'), 'ort0', 'zeigt hw:active ins Leere, gilt der erste');
+  assert.equal(resolveActive(liste, null), 'ort0', 'fehlt hw:active, gilt der erste');
+  assert.equal(resolveActive(liste, undefined), 'ort0');
+  assert.equal(resolveActive([], 'ort0'), null);
+  assert.equal(resolveActive(null, 'ort0'), null);
+});
+
+test('resolveActive nach afterDelete: der nachrückende Ort ist auch der, den ein Neustart wählen würde', () => {
+  const liste = orte(3);
+  const r = afterDelete(liste, 'ort1', 'ort1');
+  assert.equal(resolveActive(r.places, r.activeId), r.activeId);
+  const letzter = afterDelete(orte(1), 'ort0', 'ort0');
+  assert.equal(resolveActive(letzter.places, letzter.activeId), null);
+});
+
+test('showsSwitcher: ein Ort zeigt nur den Namen, ab zwei Orten steht der Umschalter da', () => {
+  assert.equal(showsSwitcher(orte(0)), false);
+  assert.equal(showsSwitcher(orte(1)), false);
+  assert.equal(showsSwitcher(orte(2)), true);
+  assert.equal(showsSwitcher(orte(5)), true);
+  assert.equal(showsSwitcher(null), false);
 });
