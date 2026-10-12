@@ -7,8 +7,8 @@
  *
  * Abruf: Open-Meteo ist Pflicht, load() wirft OpenMeteoError, wenn es scheitert. Bright Sky (MOSMIX als
  * zweite Meinung, DWD-Warnungen) ist Zugabe: Scheitert es, meldet load() ein Problem und liefert leere
- * Werte, nie die alten (behebt Bürg index:284 und 292). Die Wiederholung bei HTTP 429 (fetchWithRetry)
- * kommt im nächsten Schritt; load() ruft Open-Meteo bis dahin einmal.
+ * Werte, nie die alten (behebt Bürg index:284 und 292). Antwortet Open-Meteo mit HTTP 429, wiederholt
+ * fetchWithRetry den Abruf genau einmal nach 60 s; Bright Sky wird nicht wiederholt.
  */
 (function (root) {
   'use strict';
@@ -329,6 +329,70 @@
     }
   }
 
+  // Wartezeit vor dem zweiten Versuch und Deckel für Retry-After (wie update.py:25–37 der Bürg-Fassung)
+  const RETRY_WAIT_MS = 60000;
+  const RETRY_AFTER_MAX_MS = 120000;
+
+  function defaultSleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // Retry-After in Millisekunden, wenn der Kopf lesbar ist (ganze Sekunden, wie update.py mit isdigit()); sonst null
+  function readRetryAfter(res) {
+    try {
+      const raw = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;
+      return typeof raw === 'string' && /^\s*\d+\s*$/.test(raw) ? Number(raw) * 1000 : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Die Oberfläche darf den Abruf nie stören: ein werfender Beobachter wird übergangen
+  function notify(fn, arg) {
+    if (typeof fn !== 'function') { return; }
+    try {
+      fn(arg);
+    } catch (e) {
+      /* absichtlich leer */
+    }
+  }
+
+  // Wie fetchJSON, aber mit genau EINEM zweiten Versuch, wenn der erste Status in retryOn steht (Standard: 429).
+  // Wartezeit: waitMs (60 s), bei lesbarem Retry-After max(waitMs, min(Retry-After, 120 s)); Retry-After 30 s
+  // wartet also trotzdem 60 s, Retry-After 300 s nur 120 s. Vor dem Warten melden die Beobachter die Zeit an die
+  // Oberfläche: onWait(ms) wie im Plan und onWaiting({ s, ms }) mit ganzen Sekunden für statusWaiting{s}.
+  // 5xx, Netzfehler und Zeitüberschreitung werden nicht wiederholt. Ein zweiter 429 kommt als Ergebnis zurück
+  // ({ ok: false, status: 429, … }), geworfen wird nichts; load() macht daraus OpenMeteoError('rate').
+  // opts: { retryOn, waitMs, sleep, fetchImpl, onWait, onWaiting, timeoutMs }
+  async function fetchWithRetry(url, opts) {
+    const o = opts || {};
+    const retryOn = Array.isArray(o.retryOn) ? o.retryOn : [429];
+    const waitMs = typeof o.waitMs === 'number' && isFinite(o.waitMs) && o.waitMs >= 0 ? o.waitMs : RETRY_WAIT_MS;
+    const sleep = typeof o.sleep === 'function' ? o.sleep : defaultSleep;
+    const base = o.fetchImpl || (typeof root.fetch === 'function' ? root.fetch : null);
+
+    // Ein Versuch; die Köpfe liest nur der Umweg über fetchImpl, weil fetchJSON sie nicht weitergibt
+    async function attempt() {
+      let retryAfterMs = null;
+      const spy = base ? async (u, init) => {
+        const res = await base(u, init);
+        retryAfterMs = readRetryAfter(res);
+        return res;
+      } : undefined;
+      const r = await fetchJSON(url, { fetchImpl: spy, timeoutMs: o.timeoutMs });
+      return { r, retryAfterMs };
+    }
+
+    const first = await attempt();
+    if (retryOn.indexOf(first.r.status) < 0) { return first.r; }
+
+    const wait = first.retryAfterMs === null ? waitMs : Math.max(waitMs, Math.min(first.retryAfterMs, RETRY_AFTER_MAX_MS));
+    notify(o.onWait, wait);
+    notify(o.onWaiting, { s: Math.ceil(wait / 1000), ms: wait });
+    await sleep(wait);
+    return (await attempt()).r;
+  }
+
   // null, wenn die Open-Meteo-Antwort brauchbar ist, sonst der passende Fehler
   function omFailure(r) {
     if (r.error === 'timeout') { return new OpenMeteoError('timeout', 'Open-Meteo antwortet nicht rechtzeitig'); }
@@ -385,7 +449,9 @@
   // 'alertsFailed'. Es gibt keinen alten Cache als Eingabe; was nicht ankommt, ist leer (mos [], alerts null).
   //   alertsStatus  'ok' (Warnungen da), 'none' (Abfrage ohne Warnung), 'outside' (kein DWD-Gebiet: Ort nicht
   //                 in Deutschland, nicht abgefragt oder 404), 'error' (Abfrage gescheitert)
-  // opts: { fetchImpl, nowMs, timeoutMs }
+  // Open-Meteo wird bei HTTP 429 einmal nach 60 s wiederholt (fetchWithRetry); ein zweiter 429 wirft
+  // OpenMeteoError('rate'). Bright Sky wird nie wiederholt.
+  // opts: { fetchImpl, sleep, nowMs, timeoutMs, onWait, onWaiting }
   async function load(place, opts) {
     const o = opts || {};
     const nowMs = typeof o.nowMs === 'number' && isFinite(o.nowMs) ? o.nowMs : Date.now();
@@ -395,7 +461,9 @@
       throw new OpenMeteoError('invalid', 'Ort ohne Koordinaten');
     }
 
-    const r = await fetchJSON(omUrl(place), net);
+    const r = await fetchWithRetry(omUrl(place), {
+      fetchImpl: o.fetchImpl, timeoutMs: o.timeoutMs, sleep: o.sleep, onWait: o.onWait, onWaiting: o.onWaiting
+    });
     const failure = omFailure(r);
     if (failure) { throw failure; }
     const om = r.json;
@@ -441,6 +509,7 @@
     omUrl,
     bsUrls,
     fetchJSON,
+    fetchWithRetry,
     load,
     tzSafe,
     localNow,

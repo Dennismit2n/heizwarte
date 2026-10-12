@@ -1,0 +1,67 @@
+{
+  "_hinweis": "Antwortfolgen für fetchWithRetry (BAUPLAN Abschnitt 5 weather und Abschnitt 12). Jeder Schlüssel ist eine Folge für fakeFetch aus tests/_fake.js: der n-te Aufruf bekommt Element n, das letzte gilt dann weiter. Ein body, der mit @ beginnt, steht für den Inhalt der Fixture-Datei dieses Namens (tests/weather.test.js löst das auf). Der 429-Körper folgt der Form des 400ers von Open-Meteo, der Wortlaut stammt aus den Issues 438 und 439 (KT §5.2); dass Open-Meteo bei 429 einen Retry-After-Kopf schickt, ist nirgends dokumentiert, die Folgen mit Kopf testen nur die Regel.",
+
+  "200": [
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "429-dann-200": [
+    { "status": 429, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "429-dann-429": [
+    { "status": 429, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 429, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } }
+  ],
+
+  "429-tageslimit-dann-200": [
+    { "status": 429, "body": { "error": true, "reason": "Daily API request limit exceeded. Please try again tomorrow." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-0": [
+    { "status": 429, "headers": { "Retry-After": "0" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-30": [
+    { "status": 429, "headers": { "Retry-After": "30" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-90": [
+    { "status": 429, "headers": { "Retry-After": "90" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-120": [
+    { "status": 429, "headers": { "Retry-After": "120" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-300": [
+    { "status": 429, "headers": { "Retry-After": "300" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-unlesbar": [
+    { "status": 429, "headers": { "Retry-After": "bald" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "retry-after-datum": [
+    { "status": 429, "headers": { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" }, "body": { "error": true, "reason": "Minutely API request limit exceeded. Please try again in one minute." } },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "500-dann-200": [
+    { "status": 500, "body": "<html>Interner Fehler</html>" },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ],
+
+  "503-dann-200": [
+    { "status": 503, "headers": { "Retry-After": "30" }, "body": "Wartung" },
+    { "status": 200, "body": "@om-buerg-2026-10-09.json" }
+  ]
+}
