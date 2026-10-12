@@ -201,6 +201,42 @@
     return enforceOrder(out, field);
   }
 
+  // Die acht Ampelschwellen je Ort (Abschnitt 7, „Für Fortgeschrittene“) als Stepper. Die Feldnamen sind die von
+  // heat.THRESH/Thresh, id ist der Anfang der Element-IDs im Markup und zugleich der Schlüssel der Beschriftung.
+  // **Entwurf** (der Plan nennt keine Grenzen): Der Standardwert (heat.DEFAULT_THRESH) liegt in jedem Bereich, mit Platz
+  // nach beiden Seiten; Temperaturen und Veränderungen in 1-°C-Schritten, Wind in 5 km/h, der Anstieg des Heizbedarfs
+  // in Kd. Die Veränderungen des Tagesmittels (Drop48) sind Abkühlungen, also negativ. Die Reihenfolge warn ≥ alarm ≥ crit
+  // wird nicht erzwungen: jeder Stepper schreibt nur sein eigenes Feld, und heat.assess kommt mit jeder Mischung zurecht.
+  const THRESH_STEPPERS = {
+    warnMinN: { id: 'threshWarnMinN', min: -5, max: 15, step: 1, unit: 'unitCelsius', label: 'threshWarnMinN' },
+    warnDrop48: { id: 'threshWarnDrop48', min: -12, max: -1, step: 1, unit: 'unitCelsius', label: 'threshWarnDrop48' },
+    alarmMinN: { id: 'threshAlarmMinN', min: -10, max: 10, step: 1, unit: 'unitCelsius', label: 'threshAlarmMinN' },
+    alarmDrop48: { id: 'threshAlarmDrop48', min: -15, max: -1, step: 1, unit: 'unitCelsius', label: 'threshAlarmDrop48' },
+    alarmGtRise: { id: 'threshAlarmGtRise', min: 1, max: 15, step: 1, unit: 'unitKd', label: 'threshAlarmGtRise' },
+    critMinN: { id: 'threshCritMinN', min: -20, max: 5, step: 1, unit: 'unitCelsius', label: 'threshCritMinN' },
+    coldWind: { id: 'threshColdWind', min: 10, max: 60, step: 5, unit: 'unitKmh', label: 'threshColdWind' },
+    gustLead: { id: 'threshGustLead', min: 20, max: 100, step: 5, unit: 'unitKmh', label: 'threshGustLead' }
+  };
+  const THRESH_FIELDS = ['warnMinN', 'warnDrop48', 'alarmMinN', 'alarmDrop48', 'alarmGtRise', 'critMinN', 'coldWind', 'gustLead'];
+
+  // Ein Schritt eines Schwellen-Steppers. thresh ist place.heat.thresh (null oder ein Teilobjekt), defaults die
+  // Standardwerte (heat.DEFAULT_THRESH): Ein Feld ohne eigenen Wert startet beim Standardwert. Rückgabe ist das neue
+  // Teilobjekt, das NUR dieses eine Feld ändert (aus null wird { feld: wert }; thresh selbst bleibt unberührt), oder
+  // null, wenn sich nichts ändert (unbekanntes Feld, Rand des Bereichs).
+  function applyThreshStep(thresh, defaults, field, dir) {
+    const spec = THRESH_STEPPERS[field];
+    if (!spec) { return null; }
+    const own = thresh && typeof thresh === 'object' ? thresh : {};
+    const base = defaults && isNum(defaults[field]) ? defaults[field] : spec.min;
+    const current = isNum(own[field]) ? own[field] : base;
+    const snapped = Math.round(current / spec.step) * spec.step;
+    const next = clampTo(spec, snapped + (dir > 0 ? spec.step : -spec.step));
+    if (next === current) { return null; }
+    const out = Object.assign({}, own);
+    out[field] = next;
+    return out;
+  }
+
   // Was die Einstellungen aus dem Höhenfeld speichern (Abschnitt 8, „Höhe in den Einstellungen“). parsed kommt von
   // parseElev, autoElev ist die Antwort von geo.elevation (nur bei leerem Feld gebraucht). Eine Zahl heißt von Hand
   // (elevAuto false); leer heißt automatisch (elevAuto true), und ohne Antwort des Dienstes bleibt elev null, dann
@@ -1810,6 +1846,56 @@
     scheduleRecalc();
   }
 
+  // „Für Fortgeschrittene“: die acht Schwellen mit Zahl und Einheit. Angezeigt wird, was heat.thresholds(place) liefert
+  // (eigener Wert, sonst Standardwert). Eine Zahl wird nur neu geschrieben, wenn sie sich ändert: Die Live-Region läse
+  // sonst bei „Auf Faustregel zurücksetzen“ alle acht Werte vor, auch die unveränderten. Am Rand bleibt der Knopf
+  // fokussierbar (aria-disabled).
+  function renderThresh() {
+    const place = state.place;
+    if (!place) { return; }
+    const T = heat.thresholds(place);
+    for (const field of THRESH_FIELDS) {
+      const spec = THRESH_STEPPERS[field];
+      const value = T[field];
+      const what = t(spec.label);
+      const out = $(spec.id + 'Out');
+      const down = $(spec.id + 'Down');
+      const up = $(spec.id + 'Up');
+      const text = t(spec.unit, { n: numAuto(value) });
+      if (out.textContent !== text) { out.textContent = text; }
+      down.setAttribute('aria-label', t('stepDown', { what }));
+      up.setAttribute('aria-label', t('stepUp', { what }));
+      setAriaDisabled(down, value <= spec.min);
+      setAriaDisabled(up, value >= spec.max);
+    }
+  }
+
+  // Ein Stepper schreibt nur sein eigenes Feld in place.heat.thresh (aus null wird { feld: wert }); die übrigen
+  // sieben Schwellen mischt heat.thresholds() aus den Standardwerten dazu. Rechnet Ampel und Fahrplan entprellt neu.
+  function onThreshStep(field, dir) {
+    const place = state.place;
+    if (!place) { return; }
+    const next = applyThreshStep(place.heat.thresh, heat.DEFAULT_THRESH, field, dir);
+    if (!next) { return; }
+    place.heat.thresh = next;
+    persist('places', state.places);
+    renderThresh();
+    scheduleRecalc();
+  }
+
+  // „Auf Faustregel zurücksetzen“: thresh wird null, alle acht Schwellen gelten wieder als Standard. Der Knopf bleibt
+  // immer bedienbar; ohne eigene Schwellen tut er nichts.
+  function onThreshReset() {
+    const place = state.place;
+    if (!place) { return; }
+    const had = place.heat.thresh !== null && place.heat.thresh !== undefined;
+    place.heat.thresh = null;
+    if (!had) { return; }
+    persist('places', state.places);
+    renderThresh();
+    scheduleRecalc();
+  }
+
   // Heizart gewählt: Wechsel setzt confirmed true und, nur bei neuer Heizart, die Aufheizzeiten (applyHeatType)
   function onSettingsHeat(e) {
     const place = state.place;
@@ -2046,6 +2132,7 @@
       radio.checked = radio.value === place.heat.type;
     }
     renderSteppers();
+    renderThresh();
     renderSettingsElev();
   }
 
@@ -2201,6 +2288,12 @@
       on(field + 'Down', 'click', () => onStep(field, -1));
       on(field + 'Up', 'click', () => onStep(field, 1));
     }
+    for (const field of THRESH_FIELDS) {
+      const id = THRESH_STEPPERS[field].id;
+      on(id + 'Down', 'click', () => onThreshStep(field, -1));
+      on(id + 'Up', 'click', () => onThreshStep(field, 1));
+    }
+    on('btnThreshReset', 'click', onThreshReset);
     on('btnSettingsElev', 'click', () => openSettingsElev($('settingsElevEdit').hidden));
     on('settingsElevInput', 'change', onElevCommit);
     on('settingsElevInput', 'input', clearElevError);
@@ -2261,13 +2354,14 @@
 
   // Nur für Node-Tests (tests/app.test.js): die reinen Funktionen von Ampel, Fahrplan, Statuszeile, Jetzt-Block,
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
-  // Einstellungen (STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel) und die Ortsliste
+  // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
+  // afterDelete, cleanLabel) und die Ortsliste
   // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
-      STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel,
+      STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
       MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
     };
   }

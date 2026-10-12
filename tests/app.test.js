@@ -25,7 +25,7 @@ const path = require('node:path');
 const Heizwarte = require('./_load.js');
 const {
   verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
-  STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel,
+  STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
   MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
 } = require('../js/app.js');
 const heat = Heizwarte.heat;
@@ -951,6 +951,126 @@ test('applyStep: nach beliebig vielen Schritten liegt alles im Bereich, auf dem 
     }
     assert.ok(v.leadMin <= v.leadMax, 'leadMin ' + v.leadMin + ' > leadMax ' + v.leadMax + ' im Schritt ' + i);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Einstellungen: Schwellen „Für Fortgeschrittene“ (BAUPLAN Abschnitt 7: Ampelschwellen pro Ort)
+// ---------------------------------------------------------------------------------------------
+
+const SCHWELLEN = ['warnMinN', 'warnDrop48', 'alarmMinN', 'alarmDrop48', 'alarmGtRise', 'critMinN', 'coldWind', 'gustLead'];
+
+test('Schwellen-Stepper: genau die acht Felder von heat.DEFAULT_THRESH, Standardwert liegt im Bereich und auf dem Raster', () => {
+  assert.deepEqual(THRESH_FIELDS, SCHWELLEN);
+  assert.deepEqual(Object.keys(THRESH_STEPPERS), SCHWELLEN);
+  assert.deepEqual(Object.keys(heat.DEFAULT_THRESH).sort(), SCHWELLEN.slice().sort());
+  for (const f of SCHWELLEN) {
+    const s = THRESH_STEPPERS[f];
+    const d = heat.DEFAULT_THRESH[f];
+    assert.ok(s.min < s.max && s.step > 0, f);
+    assert.ok(d > s.min && d < s.max, f + ': der Standardwert ' + d + ' hat Platz nach beiden Seiten');
+    assert.equal((d - s.min) % s.step, 0, f + ': der Standardwert liegt auf dem Raster');
+    assert.equal(s.label, 'thresh' + f[0].toUpperCase() + f.slice(1), f + ': Beschriftung');
+    assert.equal(s.id, s.label, f + ': die IDs im Markup beginnen mit dem Schlüssel');
+    assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.label), f + ': Beschriftung in de');
+    assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.unit), f + ': Einheit in de');
+  }
+  // die Beispiele aus M3-DoD 1 (warnMinN 8 und 12) liegen im Bereich
+  assert.ok(THRESH_STEPPERS.warnMinN.min <= 8 && THRESH_STEPPERS.warnMinN.max >= 12);
+  // Zahl mit Einheit, wie der Stepper sie zeigt; das Minus ist das echte Minuszeichen
+  assert.equal(i18n.t('unitCelsius', { n: roundedNum(-4) }), '−4 °C');
+  assert.equal(i18n.t('unitKmh', { n: roundedNum(40) }), '40 km/h');
+  assert.equal(i18n.t('unitKd', { n: roundedNum(5) }), '5 Kd');
+});
+
+test('applyThreshStep: aus null wird { feld: wert }, nur dieses eine Feld, die Eingabe bleibt unberührt', () => {
+  const D = heat.DEFAULT_THRESH;
+  assert.deepEqual(applyThreshStep(null, D, 'warnMinN', 1), { warnMinN: 6 });
+  assert.deepEqual(applyThreshStep(null, D, 'warnMinN', -1), { warnMinN: 4 });
+  assert.deepEqual(applyThreshStep(undefined, D, 'alarmDrop48', -1), { alarmDrop48: -7 });
+  assert.deepEqual(applyThreshStep({}, D, 'coldWind', 1), { coldWind: 25 });
+  assert.deepEqual(applyThreshStep(null, D, 'alarmGtRise', 1), { alarmGtRise: 6 });
+  assert.deepEqual(applyThreshStep(null, D, 'gustLead', -1), { gustLead: 35 });
+  const eigen = { warnMinN: 12 };
+  const danach = applyThreshStep(eigen, D, 'coldWind', 1);
+  assert.deepEqual(danach, { warnMinN: 12, coldWind: 25 }, 'das zweite Feld kommt dazu, das erste bleibt');
+  assert.deepEqual(eigen, { warnMinN: 12 }, 'die Eingabe bleibt unberührt');
+  assert.notEqual(danach, eigen);
+  // ein eigener Wert zählt, nicht der Standard
+  assert.deepEqual(applyThreshStep({ warnMinN: 12 }, D, 'warnMinN', 1), { warnMinN: 13 });
+  // Texte, null und NaN sind keine eigenen Werte: der Schritt startet beim Standardwert
+  assert.deepEqual(applyThreshStep({ warnMinN: '12' }, D, 'warnMinN', 1), { warnMinN: 6 });
+  assert.deepEqual(applyThreshStep({ warnMinN: null }, D, 'warnMinN', 1), { warnMinN: 6 });
+  assert.deepEqual(applyThreshStep({ warnMinN: NaN }, D, 'warnMinN', 1), { warnMinN: 6 });
+  // ohne Standardwerte startet der Schritt an der unteren Grenze
+  assert.deepEqual(applyThreshStep(null, null, 'warnMinN', 1), { warnMinN: THRESH_STEPPERS.warnMinN.min + 1 });
+});
+
+test('applyThreshStep: am Rand und bei unbekanntem Feld ändert sich nichts (null), krumme Werte rasten ein', () => {
+  const D = heat.DEFAULT_THRESH;
+  assert.equal(applyThreshStep({ warnMinN: 15 }, D, 'warnMinN', 1), null);
+  assert.equal(applyThreshStep({ warnMinN: -5 }, D, 'warnMinN', -1), null);
+  assert.equal(applyThreshStep({ coldWind: 60 }, D, 'coldWind', 1), null);
+  assert.equal(applyThreshStep({ gustLead: 20 }, D, 'gustLead', -1), null);
+  assert.equal(applyThreshStep(null, D, 'nope', 1), null);
+  assert.deepEqual(applyThreshStep({ warnMinN: 9.5 }, D, 'warnMinN', 1), { warnMinN: 11 });
+  assert.deepEqual(applyThreshStep({ coldWind: 22 }, D, 'coldWind', 1), { coldWind: 25 });
+  // außerhalb der Grenzen (kaputter Speicher) führt der erste Schritt zurück in den Bereich
+  assert.deepEqual(applyThreshStep({ critMinN: -50 }, D, 'critMinN', -1), { critMinN: -20 });
+  assert.deepEqual(applyThreshStep({ alarmGtRise: 99 }, D, 'alarmGtRise', 1), { alarmGtRise: 15 });
+});
+
+test('applyThreshStep: von der unteren bis zur oberen Grenze ohne Lücke; zufällige Schritte bleiben im Bereich und auf dem Raster', () => {
+  const D = heat.DEFAULT_THRESH;
+  for (const f of SCHWELLEN) {
+    const s = THRESH_STEPPERS[f];
+    let t = { [f]: s.min };
+    let n = 0;
+    for (let next = applyThreshStep(t, D, f, 1); next; next = applyThreshStep(t, D, f, 1)) {
+      assert.equal(next[f] - t[f], s.step, f + ' von ' + t[f]);
+      t = next;
+      n++;
+    }
+    assert.equal(t[f], s.max, f + ' endet an der oberen Grenze');
+    assert.equal(n, (s.max - s.min) / s.step, f + ': Anzahl der Schritte');
+  }
+  let seed = 20261012;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  let t = null;
+  for (let i = 0; i < 4000; i++) {
+    const f = SCHWELLEN[Math.floor(rnd() * SCHWELLEN.length)];
+    const next = applyThreshStep(t, D, f, rnd() < 0.5 ? -1 : 1);
+    if (next) { t = next; }
+    for (const g of Object.keys(t || {})) {
+      assert.ok(t[g] >= THRESH_STEPPERS[g].min && t[g] <= THRESH_STEPPERS[g].max, g + ' = ' + t[g] + ' im Schritt ' + i);
+      assert.equal((t[g] - THRESH_STEPPERS[g].min) % THRESH_STEPPERS[g].step, 0, g + ' = ' + t[g] + ' liegt nicht auf dem Raster');
+    }
+  }
+});
+
+test('Schwellen-Stepper und heat.thresholds: sieben Schritte an warnMinN heben om-mild auf Stufe 1, der Rest bleibt Standard (M3-DoD 1)', () => {
+  const D = heat.DEFAULT_THRESH;
+  const standard = viewOf('om-mild.json', PROF.floorScreed);
+  assert.equal(standard.v.level, 0);
+  let thresh = null;
+  for (let i = 0; i < 7; i++) { thresh = applyThreshStep(thresh, D, 'warnMinN', 1); }
+  assert.deepEqual(thresh, { warnMinN: 12 }, 'sieben Schritte von 5 auf 12, nur dieses Feld');
+  const profil = Object.assign({}, PROF.floorScreed, { thresh });
+  assert.deepEqual(heat.thresholds(profil), Object.assign({}, D, { warnMinN: 12 }));
+  const scharf = viewOf('om-mild.json', profil);
+  assert.equal(scharf.v.level, 1);
+  assert.deepEqual(scharf.v.reasons.map((r) => r.key), ['nightMin']);
+  // „Auf Faustregel zurücksetzen“ heißt thresh = null: wieder Stufe 0 wie vorher
+  const zurueck = Object.assign({}, PROF.floorScreed, { thresh: null });
+  assert.equal(viewOf('om-mild.json', zurueck).v.level, 0);
+  assert.deepEqual(heat.thresholds(zurueck), D);
+  // warnMinN 8 lässt om-frost bei Stufe 2 (drei Schritte)
+  let acht = null;
+  for (let i = 0; i < 3; i++) { acht = applyThreshStep(acht, D, 'warnMinN', 1); }
+  assert.deepEqual(acht, { warnMinN: 8 });
+  assert.equal(viewOf('om-frost.json', Object.assign({}, PROF.floorScreed, { thresh: acht })).v.level, 2);
 });
 
 test('parseElev: leer, Zahl von −500 bis 9000 (ganze Meter) oder ungültig', () => {

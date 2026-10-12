@@ -205,10 +205,12 @@ test('Fehlerzeilen sind leere role="alert"-Divs mit tabindex -1 und liegen über
 test('Statuszeile ist die einzige aria-live-Zeile des Hauptbildschirms; der Zähler ist polite', () => {
   assert.equal(byId.get('status').attrs['aria-live'], 'polite');
   assert.equal(byId.get('setupStep').attrs['aria-live'], 'polite');
-  // außer Zähler und Statuszeile tragen nur die drei Zahlen der Stepper in den Einstellungen eine Live-Region
-  // (<output aria-live="polite">, Abschnitt 7)
+  // außer Zähler und Statuszeile tragen nur die Zahlen der Stepper in den Einstellungen eine Live-Region
+  // (<output aria-live="polite">, Abschnitt 7): die drei oben und die acht Schwellen in „Für Fortgeschrittene“
   const live = all.filter((tg) => tg.attrs['aria-live'] !== undefined).map((tg) => tg.attrs.id);
-  assert.deepEqual(live, ['setupStep', 'status', 'comfortOut', 'leadMinOut', 'leadMaxOut']);
+  assert.deepEqual(live, ['setupStep', 'status', 'comfortOut', 'leadMinOut', 'leadMaxOut',
+    'threshWarnMinNOut', 'threshWarnDrop48Out', 'threshAlarmMinNOut', 'threshAlarmDrop48Out', 'threshAlarmGtRiseOut',
+    'threshCritMinNOut', 'threshColdWindOut', 'threshGustLeadOut']);
   const main = tags(screenSlice('s-main')).filter((tg) => tg.attrs['aria-live'] !== undefined).map((tg) => tg.attrs.id);
   assert.deepEqual(main, ['status']);
   for (const id of ['comfortOut', 'leadMinOut', 'leadMaxOut']) {
@@ -781,7 +783,8 @@ test('Manifest und Kopf: Manifest-Link, theme-color, Manifest-id /heizwarte/ ab 
 test('Einstellungen: Reihenfolge der Blöcke, h3 unter der h2, Zurück oben und unten', () => {
   const slice = screenSlice('s-settings');
   const folge = ['btnSettingsBack', 'data-i18n="settingsTitle"', 'id="h-set-places"', 'id="settingsPlaceList"', 'id="h-set-heat"',
-    'id="rs-radiator"', 'id="stepComfort"', 'id="stepLeadMin"', 'id="stepLeadMax"', 'id="h-set-elev"', 'id="settingsElevInput"', 'id="btnSettingsBack2"'];
+    'id="rs-radiator"', 'id="stepComfort"', 'id="stepLeadMin"', 'id="stepLeadMax"', 'id="h-set-elev"', 'id="settingsElevInput"', 'id="settingsAdvanced"', 'id="stepThreshWarnMinN"', 'id="stepThreshGustLead"',
+    'id="btnThreshReset"', 'id="btnSettingsBack2"'];
   let letzte = -1;
   for (const f of folge) {
     const pos = slice.indexOf(f);
@@ -834,6 +837,103 @@ test('Einstellungen: drei Stepper mit Knopf „−“, Zahl in <output aria-live
   assert.ok(code.includes('t(spec.unit, { n: numAuto(value) })'), 'Zahl mit Einheit über den Schlüssel');
   assert.ok(code.includes('setAriaDisabled'), 'am Rand aria-disabled, nie disabled');
   assert.doesNotMatch(code, /\.disabled\b/);
+});
+
+test('Einstellungen: „Für Fortgeschrittene“ ist ein zugeklapptes <details> mit Hinweis, acht Steppern und „Auf Faustregel zurücksetzen“', () => {
+  const felder = ['WarnMinN', 'WarnDrop48', 'AlarmMinN', 'AlarmDrop48', 'AlarmGtRise', 'CritMinN', 'ColdWind', 'GustLead'];
+  const det = byId.get('settingsAdvanced');
+  assert.equal(det.name, 'details');
+  assert.equal(det.attrs.open, undefined, 'zugeklappt');
+  assert.equal(det.attrs.class, 'advanced');
+  const slice = screenSlice('s-settings');
+  const von = slice.indexOf('id="settingsAdvanced"');
+  const bis = slice.indexOf('</details>');
+  assert.ok(von > 0 && bis > von, 'das <details> schließt im Einstellungsbildschirm');
+  const innen = tags(slice.slice(von, bis));
+  const summary = innen.find((tg) => tg.name === 'summary');
+  assert.ok(summary, 'ohne <summary> gäbe es nichts zum Aufklappen');
+  assert.equal(summary.attrs['data-i18n'], 'settingsAdvanced');
+  assert.ok(slice.indexOf('<summary', von) < slice.indexOf('data-i18n="settingsThresholdsHint"'), 'die Zusammenfassung steht zuerst');
+  assert.ok(innen.some((tg) => tg.name === 'p' && tg.attrs['data-i18n'] === 'settingsThresholdsHint' && /\bhint\b/.test(tg.attrs.class)));
+  assert.equal(innen.filter((tg) => /^h[1-6]$/.test(tg.name)).length, 0, 'keine Überschrift: die Zusammenfassung ist die Beschriftung');
+  // acht Stepper wie die drei oberen: Beschriftung, −, Zahl in <output aria-live="polite">, +; Reihenfolge wie in THRESH_STEPPERS
+  assert.equal(innen.filter((tg) => tg.attrs.role === 'group').length, 8);
+  let letzte = von;
+  for (const F of felder) {
+    const k = 'thresh' + F;
+    const K = 'Thresh' + F;
+    const label = byId.get('lbl' + K);
+    assert.equal(label.attrs['data-i18n'], k);
+    assert.ok(has(de, k), k + ' fehlt in de');
+    const gruppe = all.find((tg) => tg.attrs.role === 'group' && tg.attrs['aria-labelledby'] === 'lbl' + K);
+    assert.ok(gruppe, 'Stepper ' + k + ' ist eine Gruppe mit der Beschriftung');
+    for (const id of [k + 'Down', k + 'Up']) {
+      const b = byId.get(id);
+      assert.equal(b.name, 'button', id);
+      assert.equal(b.attrs.type, 'button', id);
+      assert.match(b.attrs.class, /\bstep-btn\b/, id);
+      assert.equal(b.attrs['data-i18n'], undefined, id);
+    }
+    assert.match(html, new RegExp('id="' + k + 'Down"><span aria-hidden="true">−</span></button>'));
+    assert.match(html, new RegExp('id="' + k + 'Up"><span aria-hidden="true">\\+</span></button>'));
+    const out = byId.get(k + 'Out');
+    assert.equal(out.name, 'output');
+    assert.equal(out.attrs['aria-live'], 'polite');
+    assert.equal(out.attrs.for, k + 'Down ' + k + 'Up');
+    const pos = slice.indexOf('id="step' + K + '"');
+    assert.ok(pos > letzte, k + ' steht an der falschen Stelle');
+    letzte = pos;
+    assert.ok(html.indexOf('id="lbl' + K + '"') < html.indexOf('id="' + k + 'Down"') &&
+      html.indexOf('id="' + k + 'Down"') < html.indexOf('id="' + k + 'Out"') &&
+      html.indexOf('id="' + k + 'Out"') < html.indexOf('id="' + k + 'Up"'), k);
+  }
+  const reset = byId.get('btnThreshReset');
+  assert.equal(reset.name, 'button');
+  assert.equal(reset.attrs.type, 'button');
+  assert.equal(reset.attrs['data-i18n'], 'settingsReset');
+  assert.equal(reset.attrs.disabled, undefined);
+  assert.ok(slice.indexOf('id="btnThreshReset"') > letzte && slice.indexOf('id="btnThreshReset"') < bis, 'Zurücksetzen steht nach den acht Steppern, im <details>');
+  // das <details> kommt nach der Höhe und vor dem unteren „Zurück“
+  assert.ok(von > slice.indexOf('id="settingsElevInput"') && von < slice.indexOf('id="btnSettingsBack2"'));
+  // alle Einheiten der acht Stepper gibt es in de
+  for (const k of ['unitCelsius', 'unitKmh', 'unitKd']) { assert.ok(has(de, k), k); }
+  assert.match(de.unitKmh, /^\{n\} km\/h$/);
+  assert.match(de.unitKd, /^\{n\} Kd$/);
+});
+
+test('Einstellungen: die Schwellen-Stepper schreiben nur ihr Feld in place.heat.thresh, „Zurücksetzen“ setzt null, beide rechnen entprellt neu', () => {
+  assert.match(appCode, /const THRESH_FIELDS = \['warnMinN', 'warnDrop48', 'alarmMinN', 'alarmDrop48', 'alarmGtRise', 'critMinN', 'coldWind', 'gustLead'\];/);
+  const schritt = funktion(appCode, 'onThreshStep');
+  assert.ok(schritt.includes('applyThreshStep(place.heat.thresh, heat.DEFAULT_THRESH, field, dir)'), 'der Schritt kennt nur sein Feld und die Standardwerte');
+  assert.ok(schritt.includes('place.heat.thresh = next;'));
+  assert.ok(schritt.includes("persist('places', state.places)"), 'jede Änderung wird gespeichert');
+  assert.ok(schritt.includes('renderThresh();') && schritt.includes('scheduleRecalc();'));
+  const zurueck = funktion(appCode, 'onThreshReset');
+  assert.ok(zurueck.includes('place.heat.thresh = null;'), 'Faustregel heißt thresh = null');
+  assert.ok(zurueck.includes("persist('places', state.places)") && zurueck.includes('scheduleRecalc();'));
+  const zeichnen = funktion(appCode, 'renderThresh');
+  assert.ok(zeichnen.includes('heat.thresholds(place)'), 'angezeigt wird der Mischwert aus eigenem und Standardwert');
+  assert.ok(zeichnen.includes("t('stepDown', { what })") && zeichnen.includes("t('stepUp', { what })"), 'aria-label aus stepDown/stepUp');
+  assert.ok(zeichnen.includes('t(spec.unit, { n: numAuto(value) })'), 'Zahl mit Einheit über den Schlüssel');
+  assert.ok(zeichnen.includes('setAriaDisabled'), 'am Rand aria-disabled, nie disabled');
+  assert.doesNotMatch(zeichnen, /\.disabled\b|innerHTML/);
+  assert.ok(zeichnen.includes('if (out.textContent !== text)'), 'unveränderte Zahlen werden nicht neu geschrieben (Live-Region)');
+  assert.ok(funktion(appCode, 'renderSettingsActive').includes('renderThresh();'), 'beim Öffnen und beim Sprachwechsel');
+  assert.match(appCode, /on\(id \+ 'Down', 'click', \(\) => onThreshStep\(field, -1\)\);/);
+  assert.match(appCode, /on\(id \+ 'Up', 'click', \(\) => onThreshStep\(field, 1\)\);/);
+  assert.match(appCode, /on\('btnThreshReset', 'click', onThreshReset\);/);
+  // das Markup kennt jede ID, die aus den Tabellen entsteht
+  for (const f of Object.keys(Heizwarte.heat.DEFAULT_THRESH)) {
+    const k = 'thresh' + f[0].toUpperCase() + f.slice(1);
+    for (const id of [k + 'Down', k + 'Up', k + 'Out']) { assert.ok(byId.has(id), '#' + id); }
+  }
+});
+
+test('Einstellungen: CSS für das <details> „Für Fortgeschrittene“ ohne Animation, die Zusammenfassung bleibt eine 48-px-Fläche', () => {
+  assert.match(css, /\.advanced\s*\{[^}]*background: var\(--surface\);[^}]*border: 1px solid var\(--line\);/);
+  assert.match(css, /\.advanced summary\s*\{[^}]*font-weight: 700;[^}]*cursor: pointer;/);
+  assert.match(css, /\.advanced-body\s*\{[^}]*display: flex;[^}]*flex-direction: column;/);
+  assert.doesNotMatch(css, /summary[^{]*\{[^}]*(?:list-style|display:\s*flex)|::marker|::-webkit-details-marker/, 'das eingebaute Dreieck bleibt: es zeigt auf/zu');
 });
 
 test('Einstellungen: Heizart-Karten bleiben die von S5, die Wahl setzt confirmed und rechnet entprellt neu', () => {
