@@ -317,6 +317,78 @@
         </div>
       </section>
 
+      <details class="advanced" id="settingsAdvanced">
+        <summary data-i18n="settingsAdvanced"></summary>
+        <div class="advanced-body">
+          <p class="hint" data-i18n="settingsThresholdsHint"></p>
+          <div class="step-field" id="stepThreshWarnMinN">
+            <p class="step-label" id="lblThreshWarnMinN" data-i18n="threshWarnMinN"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshWarnMinN">
+              <button type="button" class="step-btn" id="threshWarnMinNDown"><span aria-hidden="true">−</span></button>
+              <output id="threshWarnMinNOut" for="threshWarnMinNDown threshWarnMinNUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshWarnMinNUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshWarnDrop48">
+            <p class="step-label" id="lblThreshWarnDrop48" data-i18n="threshWarnDrop48"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshWarnDrop48">
+              <button type="button" class="step-btn" id="threshWarnDrop48Down"><span aria-hidden="true">−</span></button>
+              <output id="threshWarnDrop48Out" for="threshWarnDrop48Down threshWarnDrop48Up" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshWarnDrop48Up"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshAlarmMinN">
+            <p class="step-label" id="lblThreshAlarmMinN" data-i18n="threshAlarmMinN"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshAlarmMinN">
+              <button type="button" class="step-btn" id="threshAlarmMinNDown"><span aria-hidden="true">−</span></button>
+              <output id="threshAlarmMinNOut" for="threshAlarmMinNDown threshAlarmMinNUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshAlarmMinNUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshAlarmDrop48">
+            <p class="step-label" id="lblThreshAlarmDrop48" data-i18n="threshAlarmDrop48"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshAlarmDrop48">
+              <button type="button" class="step-btn" id="threshAlarmDrop48Down"><span aria-hidden="true">−</span></button>
+              <output id="threshAlarmDrop48Out" for="threshAlarmDrop48Down threshAlarmDrop48Up" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshAlarmDrop48Up"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshAlarmGtRise">
+            <p class="step-label" id="lblThreshAlarmGtRise" data-i18n="threshAlarmGtRise"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshAlarmGtRise">
+              <button type="button" class="step-btn" id="threshAlarmGtRiseDown"><span aria-hidden="true">−</span></button>
+              <output id="threshAlarmGtRiseOut" for="threshAlarmGtRiseDown threshAlarmGtRiseUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshAlarmGtRiseUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshCritMinN">
+            <p class="step-label" id="lblThreshCritMinN" data-i18n="threshCritMinN"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshCritMinN">
+              <button type="button" class="step-btn" id="threshCritMinNDown"><span aria-hidden="true">−</span></button>
+              <output id="threshCritMinNOut" for="threshCritMinNDown threshCritMinNUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshCritMinNUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshColdWind">
+            <p class="step-label" id="lblThreshColdWind" data-i18n="threshColdWind"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshColdWind">
+              <button type="button" class="step-btn" id="threshColdWindDown"><span aria-hidden="true">−</span></button>
+              <output id="threshColdWindOut" for="threshColdWindDown threshColdWindUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshColdWindUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <div class="step-field" id="stepThreshGustLead">
+            <p class="step-label" id="lblThreshGustLead" data-i18n="threshGustLead"></p>
+            <div class="stepper" role="group" aria-labelledby="lblThreshGustLead">
+              <button type="button" class="step-btn" id="threshGustLeadDown"><span aria-hidden="true">−</span></button>
+              <output id="threshGustLeadOut" for="threshGustLeadDown threshGustLeadUp" aria-live="polite"></output>
+              <button type="button" class="step-btn" id="threshGustLeadUp"><span aria-hidden="true">+</span></button>
+            </div>
+          </div>
+          <button type="button" id="btnThreshReset" data-i18n="settingsReset"></button>
+        </div>
+      </details>
+
       <button type="button" class="back" id="btnSettingsBack2" data-i18n="btnBack"></button>
     </section>
   </main>

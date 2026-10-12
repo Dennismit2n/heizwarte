@@ -258,6 +258,8 @@
       // Wert mit Einheit am Stepper; {n} ist die Zahl, formatiert mit höchstens einer Nachkommastelle
       unitHours: '{n} h',
       unitCelsius: '{n} °C',
+      unitKmh: '{n} km/h',
+      unitKd: '{n} Kd',
       themeLabel: 'Darstellung',
       themeSystem: 'System',
       themeLight: 'Hell',

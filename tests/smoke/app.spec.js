@@ -9,8 +9,9 @@
  * kommen aus den deutschen Planschlüsseln in js/i18n.js (I18N.de), nicht abgeschrieben aus der Oberfläche.
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
- * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen) und Fall 17
- * (mehrere Orte: Nachtrag, Umschalter, Wechsel während eines Abrufs, Maximum fünf) stehen schon.
+ * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen, Schwellen
+ * „Für Fortgeschrittene“), Fall 14 (Stufenzeile als Text) und Fall 17 (mehrere Orte: Nachtrag, Umschalter, Wechsel
+ * während eines Abrufs, Maximum fünf) stehen schon.
  * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5.
  */
 'use strict';
@@ -963,6 +964,144 @@ test('Fall 12: Ortsliste mit Name, Radio und Löschen mit Rückfrage; der einzig
   await expect(page.locator('#s-main')).toBeVisible();
   await expect(page.locator('#nowTemp')).toContainText('°');
   expect(await storedPlaces(page)).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 12 (Fortsetzung): „Für Fortgeschrittene“, die acht Ampelschwellen je Ort
+// ---------------------------------------------------------------------------------------------
+
+// Die Standardwerte der acht Schwellen als { Schlüssel: [Einheit, Zahl] }, so wie die Stepper sie zeigen
+const SCHWELLEN_STANDARD = {
+  threshWarnMinN: ['unitCelsius', '5'],
+  threshWarnDrop48: ['unitCelsius', '−4'],
+  threshAlarmMinN: ['unitCelsius', '0'],
+  threshAlarmDrop48: ['unitCelsius', '−6'],
+  threshAlarmGtRise: ['unitKd', '5'],
+  threshCritMinN: ['unitCelsius', '−5'],
+  threshColdWind: ['unitKmh', '20'],
+  threshGustLead: ['unitKmh', '40']
+};
+
+async function expectThreshDefaults(page) {
+  for (const [k, [unit, n]] of Object.entries(SCHWELLEN_STANDARD)) {
+    await expect(page.locator('#' + k + 'Out'), k).toHaveText(deText(unit, { n }));
+  }
+}
+
+test('Fall 12: Schwellen für Fortgeschrittene sind zugeklappt, ein Stepper schreibt nur sein Feld, „Auf Faustregel zurücksetzen“ macht thresh null', async ({ page }) => {
+  const net = await mockNet(page);
+  // milde Nächte: Stufe 0, solange warnMinN (5 °C) unter dem Tiefstwert der ersten Nacht (9,5 °C) liegt
+  net.on.forecast = (route) => answer(route, fixtureText('om-mild.json'));
+  await startClock(page);
+  await setUpByClicks(page);
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(0));
+  expect((await storedPlaces(page))[0].heat.thresh, 'ohne eigene Schwellen steht null im Speicher').toBeNull();
+
+  await openSettings(page);
+  // zugeklappt: nur die Zusammenfassung ist da, weder Zahlen noch Zurücksetzen
+  const det = page.locator('#settingsAdvanced');
+  const summary = det.locator('summary');
+  await expect(summary).toHaveText(deText('settingsAdvanced'));
+  await expect(det).not.toHaveAttribute('open', /.*/);
+  await expect(page.locator('#threshWarnMinNOut')).toBeHidden();
+  await expect(page.locator('#btnThreshReset')).toBeHidden();
+  await summary.click();
+  await expect(det).toHaveAttribute('open', '');
+  await expect(det.locator('p.hint').first()).toHaveText(deText('settingsThresholdsHint'));
+  await expectThreshDefaults(page);
+  for (const k of Object.keys(SCHWELLEN_STANDARD)) {
+    await expect(page.locator('#' + k + 'Up')).toHaveAttribute('aria-label', deText('stepUp', { what: deText(k) }));
+    await expect(page.locator('#' + k + 'Down')).toHaveAttribute('aria-label', deText('stepDown', { what: deText(k) }));
+  }
+  await expect(page.locator('#btnThreshReset')).toHaveText(deText('settingsReset'));
+  // aufgeklappt: Tippflächen, Scrollleiste und Überschriften wie auf jedem Bildschirm
+  await expectTapSizes(page, 'Einstellungen mit Schwellen');
+  await expectNoHorizontalScroll(page, 'Einstellungen mit Schwellen');
+  await expectHeadingOrder(page, 'Einstellungen mit Schwellen');
+
+  // sieben Schritte an warnMinN (5 → 12 °C): nur dieses Feld landet im Speicher, die Ampel zieht ohne neuen Abruf nach
+  const forecasts = net.count('forecast');
+  for (let i = 0; i < 7; i++) { await page.locator('#threshWarnMinNUp').click(); }
+  await expect(page.locator('#threshWarnMinNOut')).toHaveText(deText('unitCelsius', { n: '12' }));
+  expect((await storedPlaces(page))[0].heat.thresh).toEqual({ warnMinN: 12 });
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(1));
+  expect(net.count('forecast'), 'Schwellen ändern die Ampel, sie rufen nichts ab').toBe(forecasts);
+
+  // ein zweiter Stepper ergänzt sein Feld, das erste bleibt
+  await page.locator('#threshColdWindUp').click();
+  await expect(page.locator('#threshColdWindOut')).toHaveText(deText('unitKmh', { n: '25' }));
+  expect((await storedPlaces(page))[0].heat.thresh).toEqual({ warnMinN: 12, coldWind: 25 });
+  await expect(page.locator('#threshWarnMinNOut')).toHaveText(deText('unitCelsius', { n: '12' }));
+  await expect(page.locator('#threshGustLeadOut')).toHaveText(deText('unitKmh', { n: '40' }));
+
+  // nach dem Neuladen stehen die Werte da, das <details> ist wieder zu und lässt sich mit der Tastatur öffnen
+  await page.reload();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(1));
+  // der Start ruft einmal ab; von hier an zählt der Stand danach
+  await expect.poll(() => net.count('forecast'), { message: 'der Start nach dem Neuladen ruft einmal ab' }).toBe(forecasts + 1);
+  const forecastsStart = net.count('forecast');
+  await openSettings(page);
+  await expect(det).not.toHaveAttribute('open', /.*/);
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  await expect(det).toHaveAttribute('open', '');
+  await expect(page.locator('#threshWarnMinNOut')).toHaveText(deText('unitCelsius', { n: '12' }));
+  await expect(page.locator('#threshColdWindOut')).toHaveText(deText('unitKmh', { n: '25' }));
+
+  // am Rand bleibt der Knopf fokussierbar (aria-disabled, nie disabled) und tut nichts
+  for (let i = 0; i < 4; i++) { await page.locator('#threshGustLeadDown').click(); }
+  await expect(page.locator('#threshGustLeadOut')).toHaveText(deText('unitKmh', { n: '20' }));
+  await expect(page.locator('#threshGustLeadDown')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('#threshGustLeadDown')).not.toHaveAttribute('disabled', /.*/);
+  await page.locator('#threshGustLeadDown').click({ force: true });
+  await expect(page.locator('#threshGustLeadOut')).toHaveText(deText('unitKmh', { n: '20' }));
+  expect((await storedPlaces(page))[0].heat.thresh).toEqual({ warnMinN: 12, coldWind: 25, gustLead: 20 });
+
+  // Zurücksetzen: thresh wird null, alle acht Zahlen stehen wieder auf den Faustregeln, die Ampel auf Stufe 0
+  await page.locator('#btnThreshReset').click();
+  expect((await storedPlaces(page))[0].heat.thresh).toBeNull();
+  await expectThreshDefaults(page);
+  await expect(page.locator('#threshGustLeadDown')).not.toHaveAttribute('aria-disabled', /.*/);
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(0));
+  await expect(page.locator('#btnThreshReset')).toBeFocused();
+  // und noch einmal drücken schadet nicht
+  await page.locator('#btnThreshReset').click();
+  expect((await storedPlaces(page))[0].heat.thresh).toBeNull();
+  expect(net.count('forecast'), 'auch Zurücksetzen ruft nichts ab').toBe(forecastsStart);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 14: die Ampel trägt Stufe, Zahl und Wort als Text, nie Farbe allein
+// ---------------------------------------------------------------------------------------------
+
+test('Fall 14: die Stufenzeile enthält „Stufe“, die Zahl und das Wort als Text; die Lampen sind nur Zierde', async ({ page }) => {
+  const net = await mockNet(page);
+  // je ein Wetter für Stufe 0, 2 und 3 (Stufe 1 entsteht im Fall oben über die Schwelle)
+  const faelle = [['om-mild.json', 0], ['om-frost.json', 2], ['om-hartfrost.json', 3]];
+  const wetter = (datei) => (route) => answer(route, fixtureText(datei));
+  net.on.forecast = wetter(faelle[0][0]);
+  await startClock(page);
+  await setUpByClicks(page);
+  const anfang = deText('levelOf').split('{')[0].trim();
+  expect(anfang, 'der feste Anfang des Satzes').toBe('Stufe');
+  for (const [i, [datei, stufe]] of faelle.entries()) {
+    if (i > 0) {
+      net.on.forecast = wetter(datei);
+      await page.reload();
+    }
+    const zeile = page.locator('#verdictTitle');
+    await expect(zeile, datei).toHaveText(levelLine(stufe));
+    const text = (await zeile.textContent()).trim();
+    expect(text.startsWith(anfang + ' ' + stufe), 'Wort „Stufe“ und Zahl am Anfang: ' + text).toBe(true);
+    expect(text, 'das Wort der Stufe steht im Satz').toContain(deText('level' + stufe));
+    // die Zeile ist eine Überschrift (Screenreader springen dorthin); die Lampen daneben sind Zierde und ohne Text
+    expect(await zeile.evaluate((e) => e.tagName)).toBe('H2');
+    await expect(page.locator('#verdict .lamp')).toHaveAttribute('aria-hidden', 'true');
+    expect((await page.locator('#verdict .lamp').textContent()).trim(), 'die Lampen tragen keinen Text').toBe('');
+  }
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });
 
 // ---------------------------------------------------------------------------------------------

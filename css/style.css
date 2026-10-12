@@ -871,6 +871,28 @@ button.danger {
   font-weight: 700;
 }
 
+/* „Für Fortgeschrittene“ (Abschnitt 7): zugeklapptes <details> mit den acht Schwellen-Steppern. Das Dreieck der
+   Zusammenfassung bleibt das eingebaute; sie ist mindestens 48 px hoch (Regel oben) und trägt den Fokusring. */
+.advanced {
+  padding: 0 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+}
+
+.advanced summary {
+  padding: 0.75rem 0;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-bottom: 1rem;
+}
+
 /* ---------------------------------------------------------------------------------------------
    Fußzeile (Abschnitt 8): zehn Absätze mit Quellen und Lizenzen, drei davon ganz als Link.
    Der Link trägt Unterstreichung, nie Farbe allein; a.footer-link und .visually-hidden stehen oben.
