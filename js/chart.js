@@ -188,7 +188,8 @@
   //   now              weather.localNow(): Marke „jetzt“ (now.ms)
   //   opts.width       Breite der Zeichenfläche in Pixeln, geklemmt auf 320 bis 720 (Rückfall 720)
   //   opts.scheme      'dark' (Standard) oder 'light'
-  //   opts.labels      { today, tomorrow, now, wday(ms) }: fertige Texte der Sprache (wday ist der lange Wochentag)
+  //   opts.labels      { today, tomorrow, now, wday(ms), hour(ms) }: fertige Texte der Sprache (wday ist der lange
+  //                    Wochentag, hour die Uhrzeit einer Stundenmarke in der Ortszeit; ohne hour steht die Ortsstunde)
   //   opts.fmt         { deg(x, digits) }: Grad mit „°“ in der Sprache
   // Ergebnis: markup (ein vollständiges <svg>, das app.js in das leere <svg role="img"> der Seite setzt), die Maße W, H,
   // L, R, T, B, xs (x je Stunde), hs (die Stunden des Modells) und, für bind(): ys (y je Stunde), scheme, mos (wird die
@@ -219,7 +220,9 @@
 
     // Temperaturachse: Spanne aus Hauptprognose (und zweiter Meinung, wenn sie gezeichnet wird), auf gerade Zahlen
     // gerundet und um 1 Grad aufgeweitet (Bürg index:453–456)
-    const mosOn = mosNear(model) && win.some((h) => isNum(h.mos));
+    // Gezeichnet wird sie erst ab zwei Werten im Fenster: ein einzelner Wert ergäbe einen Pfad „M x y“ ohne Strich,
+    // und die Legende verspräche eine Linie, die es nicht gibt
+    const mosOn = mosNear(model) && win.filter((h) => isNum(h.mos)).length >= 2;
     const temps = [];
     for (const h of win) {
       temps.push(h.temp);
@@ -290,9 +293,11 @@
       const name = k === 0 ? labels.today : (k === 1 ? labels.tomorrow : (typeof labels.wday === 'function' ? labels.wday(mid) : ''));
       if (name) { s += txt(x(mid), H - 12, 'middle', 'var(--muted)', name); }
     });
+    // Stundenmarken: die Uhrzeit in der Form der Sprache (12 h in en, hi, ko) aus labels.hour; ohne sie die Ortsstunde
     const ticks = W < 520 ? [12] : [6, 18];
+    const hourText = typeof labels.hour === 'function' ? (h) => labels.hour(h.ms) : (h) => String(h.h);
     for (const h of win) {
-      if (ticks.indexOf(h.h) >= 0) { s += txt(x(h.ms), H - B + 14, 'middle', 'var(--faint)', String(h.h)); }
+      if (ticks.indexOf(h.h) >= 0) { s += txt(x(h.ms), H - B + 14, 'middle', 'var(--faint)', hourText(h)); }
     }
 
     // Linien: Fläche unter der Hauptprognose, zweite Meinung gestrichelt (überspringt Stunden ohne Wert), Hauptprognose
@@ -305,7 +310,9 @@
     }
     s += '<path class="chart-line" d="' + line + '" fill="none" stroke="url(#tg)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>';
 
-    // Tiefstwert jeder Nacht im Fenster: Punkt in der Temperaturfarbe, Zahl darunter (oder darüber, wenn unten kein Platz ist)
+    // Tiefstwert jeder Nacht im Fenster: Punkt in der Temperaturfarbe, Zahl darunter (oder darüber, wenn unten kein Platz ist).
+    // Die Zahl steht auf Nachtband und Verlaufsfläche; ein Hof in der Grundfarbe (--bg, wie am Punkt) hält ihren Kontrast
+    // bei den 4,5:1, die contrast.test.js für jede Stufe gegen --bg prüft
     const anchorOf = (cx) => (cx < L + EDGE ? 'start' : (cx > W - R - EDGE ? 'end' : 'middle'));
     for (const n of (verdict && Array.isArray(verdict.nights) ? verdict.nights : [])) {
       if (!n || !isNum(n.atMs) || !isNum(n.min) || n.atMs < start || n.atMs >= end) { continue; }
@@ -313,7 +320,8 @@
       const cy = y(n.min);
       const col = tcol(n.min, undefined, scheme);
       s += '<circle class="chart-nightmin" cx="' + f2(cx) + '" cy="' + f2(cy) + '" r="4.5" fill="' + col + '" stroke="var(--bg)" stroke-width="2"/>';
-      s += txt(cx, cy + 18 <= H - B - 2 ? cy + 18 : cy - 10, anchorOf(cx), col, deg(n.min, 1), ' font-weight="700"');
+      s += txt(cx, cy + 18 <= H - B - 2 ? cy + 18 : cy - 10, anchorOf(cx), col, deg(n.min, 1),
+        ' font-weight="700" stroke="var(--bg)" stroke-width="3" stroke-linejoin="round" paint-order="stroke"');
     }
 
     // Marke „jetzt“, nur wenn die Zeit im Fenster liegt

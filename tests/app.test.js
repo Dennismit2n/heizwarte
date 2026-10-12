@@ -30,7 +30,7 @@ const Heizwarte = require('./_load.js');
 const {
   verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
   STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-  MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate
+  MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate, alertLangHint, canExpand
 } = require('../js/app.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
@@ -1278,6 +1278,38 @@ test('alertsGate: ohne Ort nichts; ein deutscher Ort mit 404 „not covered“ (
   // outside heißt alerts null: berechtigt, aber nichts da und kein Fehler → der Block bleibt weg
   assert.deepEqual(alertsGate({ cc: 'DE' }, 'outside'), { eligible: true, failed: false });
   assert.deepEqual(heat.activeAlerts(null, JAN13_MS), []);
+});
+
+test('alertLangHint: der Hinweis „nur auf Englisch“ steht in den zwölf übrigen Sprachen, nie in de und en', () => {
+  assert.equal(alertLangHint('de'), false, 'de zeigt die deutschen Texte');
+  assert.equal(alertLangHint('en'), false, 'en zeigt die englischen Texte in der eigenen Sprache');
+  assert.equal(alertLangHint('fr'), true);
+  const zwoelf = ['es', 'fr', 'it', 'nl', 'pl', 'pt', 'tr', 'ru', 'hi', 'zh', 'ja', 'ko'];
+  for (const lang of zwoelf) { assert.equal(alertLangHint(lang), true, lang); }
+  assert.equal(zwoelf.length + 2, 14);
+});
+
+// ---------------------------------------------------------------------------------------------
+// canExpand: hat „Mehr anzeigen“ etwas aufzuklappen (BAUPLAN Abschnitt 8, Block 8; Review M3 Runde 3, N4 und N6)
+// ---------------------------------------------------------------------------------------------
+
+test('canExpand: mit frischen Daten ja, ohne Daten und mit zu alten Daten nein', () => {
+  const frisch = viewOf('om-frost.json', PROF.radiator);
+  const sum = Heizwarte.chart.summary(frisch.m, frisch.v);
+  assert.ok(sum, 'die Kurve hat ein Fenster');
+  assert.equal(canExpand(frisch, sum), true);
+  // ohne Fenster der Kurve, aber mit dem heutigen Tag im Modell: das Lüften hat noch etwas zu zeigen
+  assert.equal(canExpand(frisch, null), true);
+  // zu alt: heute liegt nicht mehr im Modell, die Ampel ist tooOld, die Kurve hat kein Fenster
+  const alt = viewOf('om-frost.json', PROF.radiator, Date.UTC(2026, 0, 20, 9, 0));
+  assert.equal(alt.v.level, null);
+  assert.equal(Heizwarte.chart.summary(alt.m, alt.v), null);
+  assert.equal(canExpand(alt, Heizwarte.chart.summary(alt.m, alt.v)), false);
+  // ohne Daten
+  assert.equal(canExpand(null, null), false);
+  assert.equal(canExpand(undefined, null), false);
+  assert.equal(canExpand({ m: null, now: frisch.now, v: frisch.v }, null), false);
+  assert.equal(canExpand({ m: { days: 'x' }, now: frisch.now }, null), false);
 });
 
 // ---------------------------------------------------------------------------------------------

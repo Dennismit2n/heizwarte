@@ -798,6 +798,8 @@ async function expectChartDrawn(page) {
   await expect(svg.locator('text', { hasText: deText('chartNow') })).toHaveCount(1);
   await expect(svg.locator('text', { hasText: deText('dayToday') })).toHaveCount(1);
   await expect(svg.locator('text', { hasText: deText('dayTomorrow') })).toHaveCount(1);
+  // Stundenmarken in der Uhrzeitform der Sprache (de: „12:00“, nie die nackte Zahl), Review M3 Runde 3, N2 und N9
+  expect(await svg.locator('text').filter({ hasText: /^\d{1,2}:00$/ }).count(), 'Stundenmarken als Uhrzeit').toBeGreaterThanOrEqual(3);
   const summary = page.locator('#chartSummary');
   await expect(summary).toHaveText(deRx('chartSummary'));
   await expect(summary).toContainText('°');
@@ -811,7 +813,15 @@ async function expectChartDrawn(page) {
   await expect(page.locator('.scale-labels span')).toHaveCount(6);
 }
 
-test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem Neuladen offen, „Weniger anzeigen“ löscht hw:more', async ({ page }) => {
+// Die Kurve ist so breit gezeichnet wie ihre Spalte: viewBox-Breite = Breite von .chart-wrap, geklemmt auf 320 bis 720.
+// Nie die Rückfallbreite 720 eines verborgenen Hauptbildschirms (Review M3 Runde 3, Befund 1 und 2: am Handy stauchte
+// das die Zeichnung auf etwa 328 px, die Schrift auf etwa 5 px)
+async function expectChartFitsColumn(page, where) {
+  const width = await page.locator('.chart-wrap').evaluate((e) => Math.round(Math.min(720, Math.max(320, e.clientWidth))));
+  await expect(page.locator('#chartSvg'), where).toHaveAttribute('viewBox', new RegExp('^0 0 ' + width + ' \\d+$'));
+}
+
+test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem Neuladen offen, „Weniger anzeigen“ löscht hw:more', async ({ page, errors }) => {
   const net = await mockNet(page);
   await startClock(page);
   await setUpByClicks(page);
@@ -859,12 +869,29 @@ test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem
   await expectTapSizes(page, 'Hauptbildschirm mit Mehr anzeigen');
   await expectNoHorizontalScroll(page, 'Hauptbildschirm mit Mehr anzeigen');
   await expectHeadingOrder(page, 'Hauptbildschirm mit Mehr anzeigen');
+  await expectChartFitsColumn(page, 'nach dem Aufklappen');
+
+  // Einstellungen und „Zurück“: render() läuft, solange der Hauptbildschirm verborgen ist (beim Zurückkehren und bei
+  // einem Abruf im Hintergrund); die Kurve trägt danach trotzdem die Breite ihrer Spalte, nicht 720
+  await openSettings(page);
+  const vorher = net.count('forecast');
+  await page.clock.fastForward(61000);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect.poll(() => net.count('forecast'), { message: 'Abruf, während die Einstellungen offen sind' }).toBe(vorher + 1);
+  await settle(page);
+  await page.locator('#btnSettingsBack').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(chart).toBeVisible();
+  await expectChartFitsColumn(page, 'nach „Zurück“ aus den Einstellungen');
+  await expectChartDrawn(page);
+  await expectNoHorizontalScroll(page, 'Kurve nach „Zurück“');
 
   // Neuladen: bleibt offen (hw:more), auch der Knopf trägt den Zustand
   await page.reload();
   await expect(page.locator('#nowTemp')).toContainText('°');
   await expect(more).toHaveText(deText('btnLess'));
   await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await expectChartFitsColumn(page, 'nach dem Neuladen mit hw:more');
   await expect(chart).toBeVisible();
   await expect(air).toBeVisible();
   await expect(slots).toHaveCount(4);
@@ -895,9 +922,10 @@ test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem
   await expect(air).toBeHidden();
   expect(await storedMore(page)).toBeNull();
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
 });
 
-test('Fall 11: ist die Außenluft zu feucht, steht airNone statt der Fenster; der Erklärsatz bleibt', async ({ page }) => {
+test('Fall 11: ist die Außenluft zu feucht, steht airNone statt der Fenster; der Erklärsatz bleibt', async ({ page, errors }) => {
   const net = await mockNet(page);
   const om = JSON.parse(fixtureText('om-lueften.json'));
   om.hourly.dew_point_2m = om.hourly.dew_point_2m.map((x) => x + 20);
@@ -912,15 +940,14 @@ test('Fall 11: ist die Außenluft zu feucht, steht airNone statt der Fenster; de
   await expect(page.locator('#airNote')).toHaveText(deRx('airNote'));
   await expectFocusOnMore(page);
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
 });
 
-test('Fall 11: nahe Station → zweite Meinung in Legende und gestrichelter Linie; Zeiger und Finger öffnen den Kasten; Größenänderung zeichnet nur die Kurve neu', async ({ page }) => {
+test('Fall 11: nahe Station → zweite Meinung in Legende und gestrichelter Linie; Zeiger und Finger öffnen den Kasten; Größenänderung zeichnet nur die Kurve neu', async ({ page, errors }) => {
   const net = await mockNet(page);
-  // Bright Sky: ein MOSMIX-Wert in einer Stunde des Fensters (14.01., 12:00 Berlin), Station BACKNANG in 7,7 km
-  const bs = JSON.parse(fixtureText('bs-buerg.json'));
-  bs.weather[0].timestamp = '2026-01-14T11:00:00+00:00';
-  bs.weather[0].temperature = 2.5;
-  net.on.weather = (route) => answer(route, bs);
+  // Bright Sky: zwei MOSMIX-Werte in aufeinanderfolgenden Stunden des Fensters (14.01., 12:00 und 13:00 Berlin),
+  // Station BACKNANG in 7,7 km (ein einzelner Wert zeichnet keine Linie)
+  net.on.weather = (route) => answer(route, bsInWindow('bs-buerg.json'));
   await startClock(page);
   await setUpByClicks(page);
   await page.locator('#more').click();
@@ -932,6 +959,9 @@ test('Fall 11: nahe Station → zweite Meinung in Legende und gestrichelter Lini
   await expect(legend).toHaveCount(3);
   await expect(legend.nth(1)).toHaveText(deText('chartLegendMos', { station: 'BACKNANG', height: 291 }));
   await expect(svg.locator('path.chart-mos')).toHaveCount(1);
+  // die Linie ist wirklich ein Strich (mit „L“ und Länge), nicht nur ein Startpunkt „M x y“
+  await expect(svg.locator('path.chart-mos')).toHaveAttribute('d', /^M[\d.]+ [\d.]+L[\d.]+ [\d.]+$/);
+  expect(await svg.locator('path.chart-mos').evaluate((p) => p.getTotalLength()), 'Länge der gestrichelten Linie').toBeGreaterThan(0);
   await expect(page.locator('#chartLegend .legend-swatch')).toHaveCount(3);
   await expect(tip).toBeHidden();
 
@@ -981,9 +1011,10 @@ test('Fall 11: nahe Station → zweite Meinung in Legende und gestrichelter Lini
   await expect.poll(viewBoxOf).toBe(before);
   await expectNoHorizontalScroll(page, 'Kurve bei ' + original.width + ' px');
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error bei offener Kurve, Zeiger und Kasten').toEqual([]);
 });
 
-test('Fall 11: ohne MOSMIX-Stunden im Fenster steht chartMosFar; im hellen Theme trägt die Kurve die hellen Farben', async ({ page }) => {
+test('Fall 11: ohne MOSMIX-Stunden im Fenster steht chartMosFar; im hellen Theme trägt die Kurve die hellen Farben', async ({ page, errors }) => {
   const net = await mockNet(page);
   await startClock(page);
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -1002,6 +1033,7 @@ test('Fall 11: ohne MOSMIX-Stunden im Fenster steht chartMosFar; im hellen Theme
   const light = await page.locator('#scale').evaluate((e) => getComputedStyle(e).backgroundImage);
   expect(light).not.toBe(dark);
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1021,17 +1053,20 @@ function photonWien() {
   return JSON.stringify(json);
 }
 
-// Bright Sky aus einer Fixture, mit dem einen MOSMIX-Wert mitten im Fenster (14.01., 12:00 Berlin): bs-wien und bs-fern
-// tragen nur eine Stunde vom 11.10.2026, die außerhalb der Wetter-Fixtures vom Januar läge. So hängt es allein an der
-// Entfernung der Station, ob die zweite Meinung erscheint.
+// Bright Sky aus einer Fixture, mit zwei MOSMIX-Werten in aufeinanderfolgenden Stunden mitten im Fenster (14.01., 12:00
+// und 13:00 Berlin): bs-buerg, bs-wien und bs-fern tragen nur eine Stunde vom 11.10.2026, die außerhalb der Wetter-
+// Fixtures vom Januar läge, und ein einzelner Wert zeichnet keine Linie (chart.layout braucht zwei). So hängt es allein
+// an der Entfernung der Station, ob die zweite Meinung erscheint.
 function bsInWindow(name) {
   const bs = JSON.parse(fixtureText(name));
-  bs.weather[0].timestamp = '2026-01-14T11:00:00+00:00';
-  bs.weather[0].temperature = 2.5;
+  const first = bs.weather[0];
+  first.timestamp = '2026-01-14T11:00:00+00:00';
+  first.temperature = 2.5;
+  bs.weather = [first, Object.assign({}, first, { timestamp: '2026-01-14T12:00:00+00:00', temperature: 3.0 })];
   return bs;
 }
 
-test('DoD 7: ein Ort in Wien fragt keine Warnungen ab, zeigt keinen Warnblock, und die nahe Station zeichnet die zweite Meinung', async ({ page }) => {
+test('DoD 7: ein Ort in Wien fragt keine Warnungen ab, zeigt keinen Warnblock, und die nahe Station zeichnet die zweite Meinung', async ({ page, errors }) => {
   const net = await mockNet(page);
   net.on.photon = (route) => answer(route, photonWien());
   net.on.elevation = (route) => answer(route, { elevation: [171.0] });
@@ -1070,10 +1105,13 @@ test('DoD 7: ein Ort in Wien fragt keine Warnungen ab, zeigt keinen Warnblock, u
   await expect(page.locator('#chartLegend p')).toHaveCount(3);
   await expect(page.locator('#chartLegend p').nth(1)).toHaveText(deText('chartLegendMos', { station: 'WIEN/CITY', height: 171 }));
   await expect(page.locator('#chartSvg path.chart-mos')).toHaveCount(1);
+  await expect(page.locator('#chartSvg path.chart-mos')).toHaveAttribute('d', /L/);
+  expect(await page.locator('#chartSvg path.chart-mos').evaluate((p) => p.getTotalLength()), 'Länge der gestrichelten Linie').toBeGreaterThan(0);
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
 });
 
-test('DoD 7: liegt die Station 40 km weit weg, gibt es keine MOSMIX-Linie und chartMosFar steht in der Legende', async ({ page }) => {
+test('DoD 7: liegt die Station 40 km weit weg, gibt es keine MOSMIX-Linie und chartMosFar steht in der Legende', async ({ page, errors }) => {
   const net = await mockNet(page);
   net.on.weather = (route) => answer(route, bsInWindow('bs-fern.json'));
   await startClock(page);
@@ -1085,9 +1123,9 @@ test('DoD 7: liegt die Station 40 km weit weg, gibt es keine MOSMIX-Linie und ch
   expect(net.count('alerts'), 'in Deutschland wird gefragt').toBeGreaterThanOrEqual(1);
   await expect(page.locator('#alerts')).toBeHidden();
 
-  // der Wert liegt im Fenster, die Station aber 40 km entfernt: ausgeblendet allein wegen der 25-km-Grenze
+  // die Werte liegen im Fenster, die Station aber 40 km entfernt: ausgeblendet allein wegen der 25-km-Grenze
   const cache = await storedCache(page, place.id);
-  expect(cache.mos.length, 'ein MOSMIX-Wert im Cache').toBe(1);
+  expect(cache.mos.length, 'zwei MOSMIX-Werte im Cache').toBe(2);
   expect(cache.mosStation.distance).toBe(40000);
   await page.locator('#more').click();
   await expect(page.locator('#chart')).toBeVisible();
@@ -1097,6 +1135,7 @@ test('DoD 7: liegt die Station 40 km weit weg, gibt es keine MOSMIX-Linie und ch
   await expect(page.locator('#chartSvg path.chart-mos')).toHaveCount(0);
   await expect(page.locator('#chartSvg path.chart-line')).toHaveCount(1);
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
 });
 
 test('DoD 7: meldet der DWD für einen deutschen Ort 404 „not covered“, steht weder ein Warnblock noch ein Fehler da', async ({ page }) => {
