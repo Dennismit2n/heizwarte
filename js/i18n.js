@@ -167,6 +167,11 @@
       planOptional: 'optional',
       planDisagree: 'Die zweite Meinung sagt {t}. Im Zweifel lieber früher heizen.',
       planGusty: 'Wegen starker Böen etwas früher starten.',
+      // Je Nacht: {t} fertig mit „°“, {time} und {onset} aus fmt.time, {lead} die Zahl der Stunden ohne Einheit
+      planNightMin: 'Tiefster Wert {t} gegen {time} Uhr',
+      planLead: 'Abkühlung ab etwa {onset}. Aufheizzeit: {lead} h.',
+      // Nachtspeicher, für jeden Abend außer heute (für heute gilt chargeTonight)
+      planChargeEvening: 'Aufladung am Abend: {level}',
       strengthThrough: 'Durchheizen, keine Nachtabsenkung',
       strengthUp: 'Heizung eine Stufe höher',
       strengthNormal: 'Normal heizen',

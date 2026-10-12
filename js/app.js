@@ -1,9 +1,9 @@
 /*
  * Heizwarte — Zustand, Einrichtung, Rendern und Abruf. Als einzige Datei darf app.js beim Laden etwas tun.
  *
- * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und der Hauptbildschirm bis zu den drei
- * Tagen: Kopfzeile, Jetzt, Ampel, Warnungen, Tage (Abschnitt 8, Blöcke 1 und 3 bis 6) samt Abruf (refresh) mit
- * Cache je Ort. Statuszeile, Fahrplan, Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
+ * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und der Hauptbildschirm bis zum
+ * Heizfahrplan: Kopfzeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 und 3 bis 7) samt Abruf
+ * (refresh) mit Cache je Ort. Statuszeile, Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
  * nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
@@ -34,6 +34,19 @@
   const TEXT_KEYS = ['levelText0', 'levelText1', 'levelText2', 'levelText3'];
   // PlanEntry.charge → Schlüssel (Nachtspeicher)
   const CHARGE_KEY = { high: 'chargeHigh', up: 'chargeUp', normal: 'chargeNormal', low: 'chargeLow' };
+  // PlanEntry.strength → Schlüssel (Heizstufe der Nacht)
+  const STRENGTH_KEY = { through: 'strengthThrough', up: 'strengthUp', normal: 'strengthNormal', low: 'strengthLow' };
+  // Heizart → Schlüssel ihres Namens (Überschrift des Fahrplans)
+  const PROFILE_KEY = {
+    radiator: 'profileRadiator',
+    floorScreed: 'profileFloorScreed',
+    floorDry: 'profileFloorDry',
+    heatpumpFloor: 'profileHeatpumpFloor',
+    storage: 'profileStorage'
+  };
+  // Weiter als so viele Meter weg zählt die MOSMIX-Station nicht mehr als nah: dann keine zweite Meinung im
+  // Fahrplan (und später keine Linie in der Kurve). Annahme 25 km, KT §6.1.
+  const MOS_NEAR_M = 25000;
 
   // Schrittzähler je Weg (Tabelle in Abschnitt 6): S1 hat keinen; der Nachtrag aus den Einstellungen zählt wie die Adresse
   const STEP_OF = {
@@ -1268,6 +1281,104 @@
     });
   }
 
+  // Heizfahrplan (Abschnitt 8, Block 7): je Nacht eine Karte. Die Einträge kommen aus view.v.plan, denselben, aus
+  // denen der Handlungssatz der Ampel seinen ersten laufenden Eintrag nimmt (planPick); heat.plan() rechnet mit
+  // den Aufheizzeiten aus place.heat. Alle Zeiten sind Ortszeit des Orts (view.m.tz), nie die des Geräts.
+
+  // Erster Buchstabe groß: planNow, planToday und planDay sind Satzteile („jetzt“), hier stehen sie am Zeilenanfang
+  function upFirst(text) {
+    const chars = Array.from(text);
+    return chars.length ? chars[0].toLocaleUpperCase(i18n.lang) + chars.slice(1).join('') : text;
+  }
+
+  // Zweite Meinung (MOSMIX) zählt nur, wenn die Station nah genug liegt (Abschnitt 8, MOSMIX-Regel)
+  function mosNear(model) {
+    const s = model.mosStation;
+    return !!s && isNum(s.distance) && s.distance <= MOS_NEAR_M;
+  }
+
+  // Überschrift: „Heizfahrplan: Heizkörper“; der Nachtspeicher plant keinen Start, er lädt auf. Eine unbekannte
+  // Heizart bekommt den Namen ohne Zusatz.
+  function planHeading(place) {
+    const type = place.heat && place.heat.type;
+    if (type === 'storage') { return t('planTitleStorage'); }
+    return PROFILE_KEY[type] ? t('planFor', { profile: t(PROFILE_KEY[type]) }) : t('planTitle');
+  }
+
+  // „Heute Nacht“, „Morgen Nacht“, danach der Wochentag („Mittwoch Nacht“). Die Nacht gehört zum Abend ihres Tags.
+  function nightName(view, night) {
+    const off = night.dayIdx - view.todayIdx;
+    let day;
+    if (off === 0) {
+      day = t('dayToday');
+    } else if (off === 1) {
+      day = t('dayTomorrow');
+    } else {
+      const own = view.m.days[night.dayIdx];
+      day = own ? i18n.fmt.wday(dayMs(view, own), view.m.tz, i18n.lang, true) : '';
+    }
+    return t('planNightOf', { day });
+  }
+
+  // Zeile mit dem Start: „Jetzt“, wenn er fällig ist; sonst „Start ab 15:00“. Nur wenn der Start nicht auf den Tag
+  // der Nacht fällt (lange Aufheizzeit, früher Beginn der Abkühlung), steht der Tag davor: „Heute ab 22:00“ oder
+  // „Montag ab 22:00“.
+  function planWhen(view, entry, night, due) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    if (due) { return upFirst(t('planNow')); }
+    const time = f.time(entry.startMs, tz);
+    const startKey = weather.dayKeyOf(entry.startMs, tz);
+    const own = view.m.days[night.dayIdx];
+    if (own && startKey === own.key) { return t('planStart', { time }); }
+    if (startKey === view.now.key) { return upFirst(t('planToday', { time })); }
+    return upFirst(t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time }));
+  }
+
+  // Eine Nacht. Beim Nachtspeicher steht statt des Starts die Aufladung (kein Start, keine Aufheizzeit), und die
+  // Hinweise „fällig“, „optional“ und „Böen“ entfallen; die zweite Meinung gilt für jede Heizart.
+  function planItem(view, entry, night) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    const li = make('li', 'plan-item');
+    li.appendChild(make('h3', '', nightName(view, night)));
+    if (entry.charge) {
+      const level = t(CHARGE_KEY[entry.charge]);
+      li.appendChild(make('p', 'plan-when', night.dayIdx === view.todayIdx
+        ? t('chargeTonight', { level })
+        : t('planChargeEvening', { level })));
+    } else {
+      const due = heat.isDue(entry, view.now.ms, night.toMs);
+      li.appendChild(make('p', 'plan-when', planWhen(view, entry, night, due)));
+      const tag = entry.optional ? t('planOptional') : (due ? t('planDue') : '');
+      if (tag) { li.appendChild(make('p', 'plan-tag', tag)); }
+      li.appendChild(make('p', 'plan-strength', t(STRENGTH_KEY[entry.strength])));
+    }
+    li.appendChild(make('p', 'plan-meta', t('planNightMin', { t: f.deg(night.min, 1), time: f.time(night.atMs, tz) })));
+    if (!entry.charge) {
+      li.appendChild(make('p', 'plan-meta', t('planLead', { onset: f.time(entry.onsetMs, tz), lead: numAuto(entry.lead) })));
+      if (entry.gusty) { li.appendChild(make('p', 'plan-note', t('planGusty'))); }
+    }
+    // Richtungsneutral: Die Bedingung löst in beide Richtungen aus, und die zweite Meinung ist kein Fehler
+    if (entry.disagree && mosNear(view.m) && isNum(night.mosMin)) {
+      li.appendChild(make('p', 'plan-note', t('planDisagree', { t: f.deg(night.mosMin, 1) })));
+    }
+    return li;
+  }
+
+  function renderPlan(view) {
+    const list = $('planList');
+    list.replaceChildren();
+    const v = view ? view.v : null;
+    if (v) {
+      v.plan.forEach((entry, k) => {
+        if (v.nights[k]) { list.appendChild(planItem(view, entry, v.nights[k])); }
+      });
+    }
+    $('plan').hidden = !list.firstChild;
+    $('planHead').textContent = list.firstChild ? planHeading(state.place) : '';
+  }
+
   // Zeichnet den Hauptbildschirm neu, Block für Block; scheitert einer, laufen die übrigen weiter
   function render() {
     if (!state.place) { return; }
@@ -1278,6 +1389,7 @@
     guard(() => renderVerdict(view));
     guard(() => renderAlerts(view));
     guard(() => renderDays(view));
+    guard(() => renderPlan(view));
   }
 
   function onSettingsOpen() {
