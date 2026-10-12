@@ -42,7 +42,6 @@
     </section>
 
     <section class="screen" id="s-address" hidden>
-      <button type="button" class="back" id="btnAddrBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="setupAddressTitle"></h2>
       <p class="hint" id="geoWrong" data-i18n="setupGeoWrong" hidden></p>
       <form id="addrForm" novalidate>
@@ -65,6 +64,7 @@
           <button type="button" id="btnAddrRetry" data-act="retry" data-i18n="btnRetry" hidden></button>
           <button type="button" id="btnAddrLocation" data-act="location" data-i18n="setupByLocation" hidden></button>
         </div>
+        <button type="button" class="back" id="btnAddrBack" data-i18n="btnBack"></button>
         <div class="actions">
           <button type="submit" class="primary" id="btnSearch" data-i18n="setupSearch"></button>
         </div>
@@ -72,11 +72,11 @@
     </section>
 
     <section class="screen" id="s-hits" hidden>
-      <button type="button" class="back" id="btnHitsBack" data-i18n="btnBack"></button>
       <h2 tabindex="-1" data-i18n="setupHitsTitle"></h2>
       <p class="hint" data-i18n="setupHitsHint"></p>
       <ul class="hits" id="hitList"></ul>
       <button type="button" class="plain" id="btnNoneFits" data-i18n="setupNoneFits"></button>
+      <button type="button" class="back" id="btnHitsBack" data-i18n="btnBack"></button>
     </section>
 
     <section class="screen" id="s-confirm" hidden>
@@ -196,11 +196,10 @@
       <section class="verdict" id="verdict">
         <div class="lamp" aria-hidden="true"><i class="l3"></i><i class="l2"></i><i class="l1"></i><i class="l0"></i></div>
         <div class="verdict-body">
-          <h2 id="verdictTitle" hidden></h2>
+          <h2 id="verdictTitle"></h2>
           <p class="verdict-action" id="verdictAction" hidden></p>
           <p id="verdictText" hidden></p>
           <ul class="reasons" id="verdictReasons" hidden></ul>
-          <p id="verdictNote" hidden></p>
         </div>
       </section>
 

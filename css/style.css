@@ -547,7 +547,8 @@ select {
 }
 
 /* Ampel: vier Lampen sind Zierde (aria-hidden), Stufe, Wort und Satz stehen als Text daneben.
-   Die Stufenfarbe liegt in --lv (per style.setProperty gesetzt), die Lampen haben je eine eigene. */
+   Die Stufenfarbe liegt in --lv (per style.setProperty gesetzt), die Lampen haben je eine eigene. Ohne Stufe
+   (keine Daten, Daten zu alt) fehlt --lv, dann bleibt die Ampel neutral statt grün getönt. */
 .verdict {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -556,8 +557,8 @@ select {
   padding: 1rem;
   border-radius: 1.125rem;
   border: 1px solid var(--line);
-  border-left: 6px solid var(--lv, var(--ok));
-  background: color-mix(in oklch, var(--lv, var(--ok)) 9%, var(--bg));
+  border-left: 6px solid var(--lv, var(--line));
+  background: color-mix(in oklch, var(--lv, var(--line)) 9%, var(--bg));
 }
 
 .lamp {

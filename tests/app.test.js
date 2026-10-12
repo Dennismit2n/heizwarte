@@ -5,8 +5,11 @@
  * also lässt sich die Datei laden und ihr Node-Export (nur diese drei Funktionen) benutzen. Die Tests füttern sie mit
  * echten Ergebnissen von heat.assess() auf den Fixtures und mit dem echten i18n.t(); die Formatierer (fmt) sind
  * kleine Ersatzobjekte, die zählen, ob der Start-Zweig überhaupt gerufen wird. Damit ist der Nachtspeicher-Zweig
- * bewiesen: keine Startzeit, keine Aufheizzeit, dafür die Aufladung am Abend. Am Ende steht die Zustandstabelle der
+ * bewiesen: keine Startzeit, keine Aufheizzeit, dafür die Aufladung am Abend. Danach steht die Zustandstabelle der
  * Statuszeile (BAUPLAN Abschnitt 8, Block 2): jeder Zustand, die 26-Stunden-Grenze, kein Cache, zu alte Daten.
+ * Seit Review Runde 2 zusätzlich: die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen) über die
+ * Uhrumstellung am 25.10.2026 und in Lissabon, der Jetzt-Block (currentOf) in der doppelten Stunde, der Umriss
+ * (extentLine) ohne feste Einheit und die Hausnummer (extractNumber) mit „12/1“ und „5-7“.
  */
 'use strict';
 
@@ -16,7 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
-const { verdictLines, planRows, statusLines } = require('../js/app.js');
+const { verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen } = require('../js/app.js');
 const heat = Heizwarte.heat;
 const weather = Heizwarte.weather;
 const i18n = Heizwarte.i18n;
@@ -319,11 +322,26 @@ test('verdictLines Fußbodenheizung: levelTitle mit Satzteil und levelText mit A
   assert.equal(out.action, 'Heizung ZEIT deutlich hochdrehen.');
   const e = view.v.plan[0];
   assert.equal(out.body, i18n.t('levelText2', { onset: i18n.fmt.time(e.onsetMs, view.m.tz), lead: roundedNum(e.lead) }));
-  assert.match(out.body, /^Abkühlung setzt gegen \d{1,2}:\d{2} ein\. Bei \d(,\d)? Stunden Aufheizzeit musst du vorher starten\.$/);
+  assert.match(out.body, /^Abkühlung setzt gegen \d{1,2}:\d{2} ein\. Bei \d(,\d)? h Aufheizzeit musst du vorher starten\.$/);
   assert.doesNotMatch(out.action, /Aufladung/);
 });
 
-test('verdictLines: Stufe 0 ist für jede Heizart dieselbe, ohne Eintrag bleibt es bei levelTitle0', () => {
+test('verdictLines: Aufheizzeit 1 heißt „1 h“, nie „1 Stunden“ (Heizkörper, Trockenbau; alle drei Stufen gleich)', () => {
+  const view = viewOf('om-frost.json', PROF.radiator);
+  const { fmt } = fmtFor(view);
+  const e = Object.assign({}, view.v.plan[0], { lead: 1 });
+  for (const level of [1, 2, 3]) {
+    const out = verdictLines(level, e, placeOf(PROF.radiator), fmt);
+    assert.match(out.body, /Bei 1 h Aufheizzeit musst du vorher starten\.$/, 'Stufe ' + level);
+    assert.doesNotMatch(out.body, /Stunden/, 'Stufe ' + level);
+  }
+  const halb = verdictLines(1, Object.assign({}, e, { lead: 0.5 }), placeOf(PROF.radiator), fmt);
+  assert.match(halb.body, /Bei 0,5 h Aufheizzeit/);
+  // derselbe Wortlaut wie im Fahrplan (planLead): Zahl und „h“
+  assert.match(i18n.t('planLead', { onset: '22:00', lead: '1' }), /1 h\.$/);
+});
+
+test('verdictLines: Stufe 0 ist für jede Heizart dieselbe; ab Stufe 1 ohne Eintrag bleiben beide Zeilen leer', () => {
   const view = viewOf('om-mild.json', PROF.storage);
   assert.equal(view.v.level, 0);
   const { fmt } = fmtFor(view);
@@ -332,7 +350,12 @@ test('verdictLines: Stufe 0 ist für jede Heizart dieselbe, ohne Eintrag bleibt 
   assert.deepEqual(speicher, boden);
   assert.equal(speicher.action, i18n.t('levelTitle0'));
   assert.equal(speicher.body, i18n.t('levelText0'));
-  assert.deepEqual(verdictLines(2, null, placeOf(PROF.storage), fmt), { action: i18n.t('levelTitle0'), body: '' });
+  // Der Satz von Stufe 0 („Normalbetrieb“) widerspräche einer Überschrift „Stufe 2 von 3“; die Zeilen bleiben leer
+  for (const level of [1, 2, 3]) {
+    for (const prof of [PROF.storage, PROF.floorScreed, PROF.radiator]) {
+      assert.deepEqual(verdictLines(level, null, placeOf(prof), fmt), { action: '', body: '' }, 'Stufe ' + level + ' ' + prof.type);
+    }
+  }
 });
 
 test('verdictLines Nachtspeicher: ohne charge im Eintrag bleibt der Handlungssatz leer statt einer falschen Startzeit', () => {
@@ -594,4 +617,210 @@ test('Beweis: statusLines liefert unter jeder Prozess-Zeitzone denselben Text', 
   assert.ok(berlin.length > 1000);
   assert.equal(lauf('Pacific/Auckland'), berlin);
   assert.equal(lauf('America/New_York'), berlin);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Zeitlogik des Fahrplans: whenPhrase, nightName, planWhen (Review Runde 2, N8)
+// ---------------------------------------------------------------------------------------------
+
+// Uhrumstellung: In der Nacht zum 25.10.2026 gibt es in Berlin 2 Uhr zweimal (00:00Z als Sommerzeit, 01:00Z als
+// Winterzeit). om-dst.json beginnt am Samstag, 24.10., um 0:00 Ortszeit.
+const DST = {
+  satNoon: Date.UTC(2026, 9, 24, 10, 0),     // Samstag 12:00 Sommerzeit
+  first230: Date.UTC(2026, 9, 25, 0, 30),    // Sonntag 2:30, erstes Mal (Sommerzeit)
+  second230: Date.UTC(2026, 9, 25, 1, 30),   // Sonntag 2:30, zweites Mal (Winterzeit)
+  second245: Date.UTC(2026, 9, 25, 1, 45),   // Sonntag 2:45, zweites Mal
+  sun3: Date.UTC(2026, 9, 25, 2, 0)          // Sonntag 3:00 Winterzeit
+};
+
+// Ansicht wie buildView() in app.js, nur ohne Ampel (die Zeitlogik und der Jetzt-Block brauchen sie nicht)
+function viewAt(name, nowMs, fetched) {
+  const m = weather.model({ v: 2, fetched: fetched === undefined ? 0 : fetched, om: fixture(name), mos: [], mosStation: null, alerts: null, alertsStatus: 'none' });
+  const now = weather.localNow(m.tz, nowMs);
+  return { m, now, todayIdx: m.days.findIndex((d) => d.key === now.key) };
+}
+
+// Zeitformatierer wie timeFmt() in app.js, mit fester Sprache und der Zeitzone, die der Test nennt
+function ztFor(tz) {
+  const f = i18n.fmt;
+  return {
+    t: i18n.t,
+    lang: 'de',
+    time: (ms) => f.time(ms, tz, 'de'),
+    wday: (ms) => f.wday(ms, tz, 'de', true),
+    dayKey: (ms) => weather.dayKeyOf(ms, tz)
+  };
+}
+
+test('whenPhrase am 25.10.2026: die doppelte Stunde 2:30 heißt „heute ab 2:30“, nicht 1:30 oder 3:30', () => {
+  const zt = ztFor('Europe/Berlin');
+  // jetzt ist das erste 2:30 (Sommerzeit), der Start das zweite (Winterzeit): noch nicht fällig, heute, 2:30
+  const erst = viewAt('om-dst.json', DST.first230);
+  assert.equal(erst.now.key, '2026-10-25');
+  assert.equal(whenPhrase(erst, { startMs: DST.second230 }, zt), 'heute ab 2:30');
+  assert.equal(whenPhrase(erst, { startMs: DST.sun3 }, zt), 'heute ab 3:00');
+  // jetzt ist das zweite 2:45: beide 2:30 liegen zurück, der Start ist fällig
+  const zweit = viewAt('om-dst.json', DST.second245);
+  assert.equal(whenPhrase(zweit, { startMs: DST.second230 }, zt), 'jetzt');
+  assert.equal(whenPhrase(zweit, { startMs: DST.first230 }, zt), 'jetzt');
+  // vom Samstag aus: der Start am Sonntag trägt den Wochentag, der am Samstag „heute“
+  const samstag = viewAt('om-dst.json', DST.satNoon);
+  assert.equal(samstag.now.key, '2026-10-24');
+  assert.equal(whenPhrase(samstag, { startMs: DST.second230 }, zt), 'Sonntag ab 2:30');
+  assert.equal(whenPhrase(samstag, { startMs: Date.UTC(2026, 9, 24, 14, 0) }, zt), 'heute ab 16:00');
+});
+
+test('planWhen über die Umstellung: eigener Tag, Folgetag, Start am Vortag und fällig', () => {
+  const zt = ztFor('Europe/Berlin');
+  const samstag = viewAt('om-dst.json', DST.satNoon);
+  const satNacht = { dayIdx: 0 };
+  const sonNacht = { dayIdx: 1 };
+  const monNacht = { dayIdx: 2 };
+  // Start auf dem Tag der Nacht: nur die Uhrzeit (16:00 Sommerzeit)
+  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 24, 14, 0) }, satNacht, false, zt), 'Start ab 16:00');
+  // Start nach Mitternacht, in der zweiten 2-Uhr-Stunde: anderer Tag als die Nacht, also mit Wochentag
+  assert.equal(planWhen(samstag, { startMs: DST.second230 }, satNacht, false, zt), 'Sonntag ab 2:30');
+  // derselbe Start, gesehen vom ersten 2:30 aus: jetzt ist schon Sonntag, also „Heute“
+  assert.equal(planWhen(viewAt('om-dst.json', DST.first230), { startMs: DST.second230 }, satNacht, false, zt), 'Heute ab 2:30');
+  // Start am Vortag der Nacht (Samstag 22:00 für die Sonntagnacht): heute bzw. mit Wochentag
+  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 24, 20, 0) }, sonNacht, false, zt), 'Heute ab 22:00');
+  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 25, 21, 0) }, monNacht, false, zt), 'Sonntag ab 22:00');
+  // Sonntagnacht nach der Umstellung: 18:00 Winterzeit = 17:00Z
+  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 25, 17, 0) }, sonNacht, false, zt), 'Start ab 18:00');
+  // fällig: „Jetzt“ mit großem Anfangsbuchstaben, ohne Uhrzeit
+  assert.equal(planWhen(samstag, { startMs: DST.satNoon }, satNacht, true, zt), 'Jetzt');
+});
+
+test('nightName: Heute, Morgen, danach der Wochentag des Abends, auch über die Umstellung', () => {
+  const zt = ztFor('Europe/Berlin');
+  const samstag = viewAt('om-dst.json', DST.satNoon);
+  assert.deepEqual([0, 1, 2, 3, 4].map((k) => nightName(samstag, { dayIdx: k }, zt)),
+    ['Heute Nacht', 'Morgen Nacht', 'Montag Nacht', 'Dienstag Nacht', 'Mittwoch Nacht']);
+  // in der doppelten Stunde ist „heute“ der Sonntag, ganz gleich, ob Sommer- oder Winterzeit
+  for (const ms of [DST.first230, DST.second230]) {
+    const v = viewAt('om-dst.json', ms);
+    assert.equal(nightName(v, { dayIdx: 1 }, zt), 'Heute Nacht');
+    assert.equal(nightName(v, { dayIdx: 3 }, zt), 'Dienstag Nacht');
+  }
+});
+
+test('Lissabon: Uhrzeit, Kalendertag und Wochentag in der Ortszeit des Orts, nicht in der Berlins', () => {
+  // Dienstag, 13.01.2026, 10:00 in Lissabon (UTC+0) = 11:00 in Berlin
+  const view = viewAt('om-lissabon.json', Date.UTC(2026, 0, 13, 10, 0));
+  assert.equal(view.m.tz, 'Europe/Lisbon');
+  assert.equal(view.now.key, '2026-01-13');
+  const zt = ztFor(view.m.tz);
+  const spaet = { startMs: Date.UTC(2026, 0, 13, 23, 30) };
+  assert.equal(whenPhrase(view, { startMs: Date.UTC(2026, 0, 13, 16, 0) }, zt), 'heute ab 16:00');
+  assert.equal(whenPhrase(view, spaet, zt), 'heute ab 23:30');
+  assert.equal(planWhen(view, spaet, { dayIdx: view.todayIdx }, false, zt), 'Start ab 23:30');
+  assert.equal(planWhen(view, { startMs: Date.UTC(2026, 0, 14, 0, 30) }, { dayIdx: view.todayIdx }, false, zt), 'Mittwoch ab 0:30');
+  assert.deepEqual([1, 2, 3].map((k) => nightName(view, { dayIdx: k }, zt)), ['Heute Nacht', 'Morgen Nacht', 'Donnerstag Nacht']);
+  // Gegenprobe: mit Berlins Zeitzone läge derselbe Start schon am Mittwoch, eine Stunde später
+  assert.equal(whenPhrase(view, spaet, ztFor('Europe/Berlin')), 'Mittwoch ab 0:30');
+});
+
+test('Beweis: whenPhrase, nightName und planWhen liefern unter jeder Prozess-Zeitzone denselben Text', () => {
+  const { execFileSync } = require('node:child_process');
+  // Die Zone wird zur Laufzeit gesetzt (process.env.TZ), weil Node unter Windows TZ beim Start nicht liest
+  // (Eintrag zum Schritt „i18n“); getTimezoneOffset zeigt, dass der Wechsel wirklich greift.
+  const skript = (tz) => `
+    process.env.TZ = ${JSON.stringify(tz)};
+    const H = require(${JSON.stringify(path.join(__dirname, '_load.js'))});
+    const { whenPhrase, nightName, planWhen } = require(${JSON.stringify(path.join(__dirname, '..', 'js', 'app.js'))});
+    const fs = require('node:fs');
+    const dir = ${JSON.stringify(path.join(__dirname, 'fixtures'))};
+    const f = H.i18n.fmt;
+    const out = [];
+    const faelle = [['om-dst.json', [${DST.satNoon}, ${DST.first230}, ${DST.second245}]], ['om-lissabon.json', [${Date.UTC(2026, 0, 13, 10, 0)}]]];
+    for (const [name, nows] of faelle) {
+      const om = JSON.parse(fs.readFileSync(require('node:path').join(dir, name), 'utf8'));
+      const m = H.weather.model({ v: 2, fetched: 0, om, mos: [], mosStation: null, alerts: null, alertsStatus: 'none' });
+      const zt = { t: H.i18n.t, lang: 'de', time: (ms) => f.time(ms, m.tz, 'de'), wday: (ms) => f.wday(ms, m.tz, 'de', true),
+        dayKey: (ms) => H.weather.dayKeyOf(ms, m.tz) };
+      for (const nowMs of nows) {
+        const now = H.weather.localNow(m.tz, nowMs);
+        const view = { m, now, todayIdx: m.days.findIndex((d) => d.key === now.key) };
+        for (let k = 0; k < m.days.length; k++) { out.push(nightName(view, { dayIdx: k }, zt)); }
+        for (const o of m.hours) {
+          if (o.h % 2 !== 0) { continue; }
+          const e = { startMs: o.ms };
+          out.push(whenPhrase(view, e, zt));
+          for (let k = 0; k < m.days.length; k++) { out.push(planWhen(view, e, { dayIdx: k }, false, zt)); }
+        }
+      }
+    }
+    process.stdout.write(JSON.stringify({ off: new Date(${Date.UTC(2026, 0, 13, 12, 0)}).getTimezoneOffset(), out }));
+  `;
+  const lauf = (tz) => JSON.parse(execFileSync(process.execPath, ['-e', skript(tz)], { encoding: 'utf8' }));
+  const berlin = lauf('Europe/Berlin');
+  const auckland = lauf('Pacific/Auckland');
+  const newYork = lauf('America/New_York');
+  assert.ok(berlin.out.length > 1000, 'zu wenige Zeilen: ' + berlin.out.length);
+  assert.ok(berlin.out.includes('heute ab 2:00'), 'die zweite 2-Uhr-Stunde vom ersten 2:30 aus ist dabei');
+  assert.equal(new Set([berlin.off, auckland.off, newYork.off]).size, 3, 'die Prozess-Zeitzone hat wirklich gewechselt');
+  assert.deepEqual(auckland.out, berlin.out);
+  assert.deepEqual(newYork.out, berlin.out);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Jetzt-Block, Umriss, Hausnummer (Review Runde 2, N12, Befund 2 mit N10, N11)
+// ---------------------------------------------------------------------------------------------
+
+test('currentOf: die Prognose-Stunde nach dem absoluten Zeitpunkt, auch in der doppelten Stunde am 25.10.', () => {
+  // zweites 2:30 (Winterzeit, 01:30Z): die Stunde ab 01:00Z, nicht die erste 2-Uhr-Stunde ab 00:00Z
+  const zweit = currentOf(viewAt('om-dst.json', DST.second230));
+  const erst = currentOf(viewAt('om-dst.json', DST.first230));
+  assert.equal(zweit.ms, Date.UTC(2026, 9, 25, 1, 0));
+  assert.equal(erst.ms, Date.UTC(2026, 9, 25, 0, 0));
+  assert.notEqual(zweit.temp, erst.temp, 'zwei verschiedene Stunden mit eigenen Werten');
+  // Lissabon: 10:20 Ortszeit → die Stunde ab 10:00
+  assert.equal(currentOf(viewAt('om-lissabon.json', Date.UTC(2026, 0, 13, 10, 20))).ms, Date.UTC(2026, 0, 13, 10, 0));
+  // frischer Abruf (höchstens 90 Minuten alt): der current-Block der Antwort
+  const frisch = viewAt('om-dst.json', DST.second230, DST.second230 - 10 * 60000);
+  assert.equal(currentOf(frisch), frisch.m.current);
+  // außerhalb der Prognose bleibt nur der current-Block
+  const danach = viewAt('om-dst.json', Date.UTC(2026, 10, 30, 12, 0));
+  assert.equal(currentOf(danach), danach.m.current);
+});
+
+test('extentLine: Einheit aus dem Schlüssel, Kilometer nur, wenn beide Maße mindestens 1 km sind', () => {
+  const fmt = { t: i18n.t, num: i18n.fmt.num };
+  assert.equal(extentLine({ w: 22.4, h: 27.6 }, fmt), 'Umriss etwa 22 × 28 m');
+  assert.equal(extentLine({ w: 2140, h: 1390 }, fmt), 'Umriss etwa 2,1 × 1,4 km');
+  // schmal und lang: beide in Metern statt „0,0 × 1,2 km“
+  assert.equal(extentLine({ w: 15, h: 1200 }, fmt), 'Umriss etwa 15 × 1.200 m');
+  assert.equal(extentLine({ w: 1200, h: 40 }, fmt), 'Umriss etwa 1.200 × 40 m');
+  // unter einem Meter je Seite wird 1 m; ohne Umriss oder ohne Fläche nichts
+  assert.equal(extentLine({ w: 0.4, h: 30 }, fmt), 'Umriss etwa 1 × 30 m');
+  assert.equal(extentLine({ w: 0, h: 0 }, fmt), '');
+  assert.equal(extentLine(null, fmt), '');
+  // echte Umrisse über geo.extentSize (wie geo.test.js): Marktstraße 1 und der Ortsteil Bürg
+  const geo = Heizwarte.geo;
+  assert.equal(extentLine(geo.extentSize([9.3962769, 48.8773938, 9.3965767, 48.8771427], 48.8772683), fmt), 'Umriss etwa 22 × 28 m');
+  assert.match(extentLine(geo.extentSize([9.4324428, 48.8941292, 9.4627316, 48.870991], 48.8817501), fmt), /^Umriss etwa \d,\d × \d,\d km$/);
+  // die Platzhalter bekommen nur Zahlen, die Einheit steckt im Schlüssel
+  const gesehen = [];
+  extentLine({ w: 22, h: 28 }, { t: (k, v) => { gesehen.push([k, v]); return k; }, num: i18n.fmt.num });
+  extentLine({ w: 2100, h: 1400 }, { t: (k, v) => { gesehen.push([k, v]); return k; }, num: i18n.fmt.num });
+  assert.deepEqual(gesehen, [['setupExtent', { w: '22', h: '28' }], ['setupExtentKm', { w: '2,1', h: '1,4' }]]);
+});
+
+test('extractNumber: Hausnummern mit Schrägstrich und Bindestrich, die Rangfolge hebt das richtige Haus', () => {
+  assert.equal(extractNumber('Hauptstraße 12/1'), '12/1');
+  assert.equal(extractNumber('Hauptstraße 12 / 1'), '12 / 1');
+  assert.equal(extractNumber('Am Markt 5-7'), '5-7');
+  assert.equal(extractNumber('Marktstraße 1 a'), '1 a');
+  assert.equal(extractNumber('Marktstraße 1'), '1');
+  assert.equal(extractNumber('10 Downing Street'), '10');
+  assert.equal(extractNumber('Hauptstraße'), '');
+  assert.equal(extractNumber(''), '');
+  // geo.rank vergleicht ohne Leerraum: das Haus 12/1 kommt vor die Häuser 1 und 12, das Haus 5-7 vor das Haus 5
+  const geo = Heizwarte.geo;
+  const haus = (nr, lon) => ({ kind: 'house', lat: 48.877, lon, label: 'Hauptstraße ' + nr, parts: { housenumber: nr } });
+  const hits = [haus('1', 9.390), haus('12', 9.391), haus('12/1', 9.392)];
+  assert.equal(geo.rank(hits, { housenumber: extractNumber('Hauptstraße 12/1') })[0].parts.housenumber, '12/1');
+  assert.equal(geo.rank(hits, { housenumber: extractNumber('Hauptstraße 12 / 1') })[0].parts.housenumber, '12/1');
+  const markt = [haus('5', 9.393), haus('5-7', 9.394)];
+  assert.equal(geo.rank(markt, { housenumber: extractNumber('Am Markt 5-7') })[0].parts.housenumber, '5-7');
 });

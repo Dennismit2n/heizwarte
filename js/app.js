@@ -27,6 +27,9 @@
   const WAIT_DEFAULT_S = 60;
   // So lange gilt der „current“-Block der Antwort als Jetzt-Wert; danach nimmt die Anzeige die Stunde der Prognose (Entwurf)
   const FRESH_MS = 90 * 60000;
+  // So lange wartet der Standort-Weg höchstens, die Zeit für die Standortabfrage des Browsers eingeschlossen. Großzügig,
+  // damit auch wer langsam liest, die Abfrage beantworten kann; danach führt errGeoFailed mit zwei Knöpfen weiter.
+  const LOCATE_DEADLINE_MS = 30000;
 
   // Ampelfarbe je Stufe 0 bis 3 (CSS-Variablen aus style.css)
   const LEVEL_COLOR = ['var(--ok)', 'var(--warn)', 'var(--alarm)', 'var(--crit)'];
@@ -137,10 +140,11 @@
     return String(Date.now());
   }
 
-  // Hausnummer aus dem Straßenfeld: erst am Ende („Marktstraße 1 a“), sonst am Anfang („10 Downing Street“)
+  // Hausnummer aus dem Straßenfeld: erst am Ende („Marktstraße 1 a“, „Hauptstraße 12/1“, „Am Markt 5-7“), sonst am
+  // Anfang („10 Downing Street“). Rein; geo.rank vergleicht ohne Leerraum („12 / 1“ trifft „12/1“).
   function extractNumber(street) {
     const s = String(street || '').trim();
-    const end = /(\d+\s?[A-Za-z]?)$/.exec(s);
+    const end = /(\d+\s?[A-Za-z]?(?:\s?[/-]\s?\d+\s?[A-Za-z]?)?)$/.exec(s);
     if (end) { return end[1]; }
     const start = /^(\d+\s?[A-Za-z]?)(?=\s|$)/.exec(s);
     return start ? start[1] : '';
@@ -347,11 +351,28 @@
   // S1 Start und der Standort-Weg
   // ---------------------------------------------------------------------------------------------
 
+  // „Mit Adresse“ führt immer weiter, auch während einer Standortsuche: Bleibt die Standortabfrage unbeantwortet
+  // (Chromes Berechtigungs-Chip klappt ein, Firefox schließt die Abfrage bei einem Klick daneben), wartete die Suche
+  // sonst ohne Ende und S1 hätte keinen Ausweg. cancelOps verwirft ihre späte Antwort (opToken).
   function onByAddress() {
     const s = state.setup;
-    if (!s || s.busy) { return; }
+    if (!s) { return; }
+    if (s.busy) { cancelOps(); }
     s.way = 'address';
     goAddress();
+  }
+
+  // Standort mit eigener Frist (LOCATE_DEADLINE_MS): Die Frist von geo.locate gilt erst nach der Erlaubnis, die Zeit
+  // bis zur Antwort auf die Standortabfrage zählt dort nicht mit. Diese hier umfasst beides; danach steht
+  // errGeoFailed mit „Nochmal“ und „Weiter“ (Abschnitt 6). Eine spätere Antwort des Geräts verpufft im Promise.race.
+  function locateWithDeadline() {
+    let timer = null;
+    const deadline = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new geo.GeoError('timeout', 'Standort: keine Antwort innerhalb von ' + (LOCATE_DEADLINE_MS / 1000) + ' s'));
+      }, LOCATE_DEADLINE_MS);
+    });
+    return Promise.race([geo.locate(navigator.geolocation), deadline]).finally(() => { clearTimeout(timer); });
   }
 
   function onLocationFailure(failure, where) {
@@ -376,14 +397,17 @@
     const token = ++s.opToken;
     const stale = () => state.setup !== s || s.opToken !== token;
     const where = state.screen === 's-address' ? 'address' : 'welcome';
-    const btn = $(where === 'address' ? 'btnAddrLocation' : 'btnByLocation');
+    // Die Laufanzeige sitzt auf einem sichtbaren Knopf. Auf S2 verschwindet der Ausweg „Standort verwenden“ mit
+    // seiner Fehlerzeile; dort trägt der Hauptknopf „Sucht …“, denn er nimmt währenddessen keine Klicks an.
+    const btn = $(where === 'address' ? 'btnSearch' : 'btnByLocation');
+    const idleKey = where === 'address' ? 'setupSearch' : 'setupByLocation';
     clearError(where);
     markBusy(btn, true, 'setupSearching');
 
     let hit = null;
     let failure = null;
     try {
-      const pos = await geo.locate(navigator.geolocation);
+      const pos = await locateWithDeadline();
       if (stale()) { return; }
       const lat = geo.round3(pos.lat);
       const lon = geo.round3(pos.lon);
@@ -399,7 +423,7 @@
     if (stale()) { return; }
 
     s.busy = false;
-    markBusy(btn, false, 'setupByLocation');
+    markBusy(btn, false, idleKey);
     if (failure) {
       onLocationFailure(failure, where);
       return;
@@ -650,17 +674,21 @@
     p.hidden = !text;
   }
 
-  // Umriss als „22 × 28 m“ bzw. „2,1 × 1,4 km“: {w} die Zahl, {h} die Zahl mit Einheit. Nichts bei Punkten ohne Umriss.
-  function extentText(hit) {
-    const size = geo.extentSize(hit.extent, hit.lat);
-    if (!size) { return ''; }
-    const f = i18n.fmt;
-    const big = Math.max(size.w, size.h);
-    if (big < 1) { return ''; }
-    if (big >= 1000) {
-      return t('setupExtent', { w: f.num(size.w / 1000, 1), h: f.num(size.h / 1000, 1) + ' km' });
+  // Umriss als „Umriss etwa 22 × 28 m“ bzw. „Umriss etwa 2,1 × 1,4 km“. Die Einheit steht im Schlüssel
+  // (setupExtent für Meter, setupExtentKm für Kilometer), hierher kommen nur Zahlen. Kilometer nur, wenn beide Maße
+  // mindestens 1000 m sind; sonst beide in Metern, damit ein schmaler, langer Umriss nicht „0,0 × 1,2 km“ heißt.
+  // Rein: size { w, h } in Metern (geo.extentSize) oder null, fmt { t, num }. Nichts bei Punkten ohne Umriss.
+  function extentLine(size, fmt) {
+    if (!size || !isNum(size.w) || !isNum(size.h)) { return ''; }
+    if (Math.max(size.w, size.h) < 1) { return ''; }
+    if (Math.min(size.w, size.h) >= 1000) {
+      return fmt.t('setupExtentKm', { w: fmt.num(size.w / 1000, 1), h: fmt.num(size.h / 1000, 1) });
     }
-    return t('setupExtent', { w: f.num(Math.max(1, Math.round(size.w)), 0), h: f.num(Math.max(1, Math.round(size.h)), 0) + ' m' });
+    return fmt.t('setupExtent', { w: fmt.num(Math.max(1, Math.round(size.w)), 0), h: fmt.num(Math.max(1, Math.round(size.h)), 0) });
+  }
+
+  function extentText(hit) {
+    return extentLine(geo.extentSize(hit.extent, hit.lat), { t, num: i18n.fmt.num });
   }
 
   function coordsOf(hit) {
@@ -813,12 +841,15 @@
     return checked && HEAT_TYPES.indexOf(checked.value) >= 0 ? checked.value : 'radiator';
   }
 
-  // Heizart setzen: Aufheizzeiten kommen aus der Tabelle der Heizart, Raumtemperatur und Schwellen bleiben
+  // Heizart setzen: Beim Wechsel der Heizart kommen die Aufheizzeiten aus ihrer Tabelle (Abschnitt 7); bleibt die
+  // Heizart dieselbe, bleiben auch eigene Aufheizzeiten stehen. Raumtemperatur und Schwellen bleiben immer.
   function applyHeatType(place, type, confirmed) {
-    const p = heat.PROFILES[type] || heat.PROFILES.radiator;
-    place.heat.type = type;
-    place.heat.leadMin = p.leadMin;
-    place.heat.leadMax = p.leadMax;
+    if (type !== place.heat.type) {
+      const p = heat.PROFILES[type] || heat.PROFILES.radiator;
+      place.heat.type = type;
+      place.heat.leadMin = p.leadMin;
+      place.heat.leadMax = p.leadMax;
+    }
     place.heat.confirmed = confirmed;
   }
 
@@ -1151,11 +1182,15 @@
     });
   }
 
-  // Wetter jetzt: frisch (höchstens FRESH_MS alt) der „current“-Block der Antwort, sonst die Prognose-Stunde der
-  // Ortszeit, die zu „jetzt“ passt; fehlt sie, bleibt der „current“-Block. Ohne beides gibt es keine Anzeige.
+  // Wetter jetzt: frisch (höchstens FRESH_MS alt) der „current“-Block der Antwort, sonst die Prognose-Stunde, in
+  // der „jetzt“ liegt; fehlt sie, bleibt der „current“-Block. Ohne beides gibt es keine Anzeige. Die Stunde wird über
+  // den absoluten Zeitpunkt gewählt, nicht über die Ortsstunde: Am 25.10. gibt es 2 Uhr zweimal, und in Zonen mit
+  // halben Stunden trifft die Wahl, ob die Stunden der Antwort auf volle Orts- oder volle UTC-Stunden fallen.
+  // Rein: kein DOM, keine Gerätezeit.
   function currentOf(view) {
     const m = view.m;
-    const hour = m.hours.find((o) => o.dayIdx === view.todayIdx && o.h === view.now.h) || null;
+    const nowMs = view.now.ms;
+    const hour = m.hours.find((o) => o.ms <= nowMs && nowMs < o.ms + 3600000) || null;
     const fresh = !!m.current && isNum(m.fetched) && view.now.ms - m.fetched <= FRESH_MS;
     return (fresh || !hour) ? (m.current || hour) : hour;
   }
@@ -1187,14 +1222,27 @@
     return view.v.plan[k >= 0 ? k : 0] || null;
   }
 
-  // Satzteil für levelTitle1–3: „jetzt“, „heute ab 15:00“ oder „Dienstag ab 15:00“
-  function whenPhrase(view, entry) {
+  // Zeitformatierer für whenPhrase, nightName und planWhen: Text und Sprache aus i18n, jede Uhrzeit, jeder Wochentag
+  // und jeder Kalendertag in der Ortszeit des Orts (view.m.tz), nie in der des Geräts. Die drei Funktionen selbst
+  // bekommen dieses Bündel als zt und sind damit rein (kein DOM, keine Module, keine Gerätezeit, in Node getestet).
+  function timeFmt(view) {
     const f = i18n.fmt;
     const tz = view.m.tz;
-    if (entry.startMs <= view.now.ms) { return t('planNow'); }
-    const time = f.time(entry.startMs, tz);
-    if (weather.dayKeyOf(entry.startMs, tz) === view.now.key) { return t('planToday', { time }); }
-    return t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time });
+    return {
+      t,
+      lang: i18n.lang,
+      time: (ms) => f.time(ms, tz),
+      wday: (ms) => f.wday(ms, tz, i18n.lang, true),
+      dayKey: (ms) => weather.dayKeyOf(ms, tz)
+    };
+  }
+
+  // Satzteil für levelTitle1–3: „jetzt“, „heute ab 15:00“ oder „Dienstag ab 15:00“
+  function whenPhrase(view, entry, zt) {
+    if (entry.startMs <= view.now.ms) { return zt.t('planNow'); }
+    const time = zt.time(entry.startMs);
+    if (zt.dayKey(entry.startMs) === view.now.key) { return zt.t('planToday', { time }); }
+    return zt.t('planDay', { day: zt.wday(entry.startMs), time });
   }
 
   // Ein Nachtspeicher kennt weder Startzeit noch Aufheizzeit (heat.plan setzt startMs null und charge). Maßgeblich ist
@@ -1209,11 +1257,12 @@
   //   fmt.time(ms)       Uhrzeit in der Ortszeit des Orts
   //   fmt.num(x)         Zahl mit höchstens einer Nachkommastelle
   // Stufe 0 gilt für jede Heizart gleich (levelTitle0, levelText0). Ab Stufe 1 steht beim Nachtspeicher
-  // chargeTonight{level} statt levelTitle1–3, und levelText1–3 entfällt: Der Satz nennt „{lead} Stunden
-  // Aufheizzeit“, und der Nachtspeicher hat keine.
+  // chargeTonight{level} statt levelTitle1–3, und levelText1–3 entfällt: Der Satz nennt „{lead} h
+  // Aufheizzeit“, und der Nachtspeicher hat keine. Ab Stufe 1 ohne Fahrplaneintrag bleiben beide Zeilen leer (sie
+  // werden verborgen, die Stufe steht in der <h2>); der Satz von Stufe 0 widerspräche der Überschrift.
   function verdictLines(level, entry, place, fmt) {
     if (level === 0) { return { action: fmt.t(TITLE_KEYS[0]), body: fmt.t(TEXT_KEYS[0]) }; }
-    if (!entry) { return { action: fmt.t(TITLE_KEYS[0]), body: '' }; }
+    if (!entry) { return { action: '', body: '' }; }
     if (isStorage(place, entry)) {
       const action = entry.charge ? fmt.t('chargeTonight', { level: fmt.t(CHARGE_KEY[entry.charge]) }) : '';
       return { action, body: '' };
@@ -1228,9 +1277,10 @@
   function verdictFmt(view) {
     const f = i18n.fmt;
     const tz = view.m.tz;
+    const zt = timeFmt(view);
     return {
       t,
-      when: (entry) => whenPhrase(view, entry),
+      when: (entry) => whenPhrase(view, entry, zt),
       time: (ms) => f.time(ms, tz),
       num: numAuto
     };
@@ -1252,7 +1302,8 @@
   }
 
   // Ampel. Die Stufe steht immer als Text (Stufe, Zahl, Wort, Satz), die vier Lampen sind nur Zierde.
-  // Ohne Modell steht levelNoData, bei Daten älter als das Fenster (level null) errTooOld.
+  // Die <h2> bleibt immer sichtbar, damit der Block auch ohne Stufe eine Überschrift hat (Sprung per Überschrift):
+  // ohne Modell steht dort levelNoData, bei Daten älter als das Fenster (level null) errTooOld.
   function renderVerdict(view) {
     const sec = $('verdict');
     const v = view ? view.v : null;
@@ -1262,8 +1313,8 @@
     }
     if (!shown) {
       sec.style.removeProperty('--lv');
-      for (const id of ['verdictTitle', 'verdictAction', 'verdictText', 'verdictReasons']) { $(id).hidden = true; }
-      setLine('verdictNote', view ? t('errTooOld') : t('levelNoData'));
+      setLine('verdictTitle', view ? t('errTooOld') : t('levelNoData'));
+      for (const id of ['verdictAction', 'verdictText', 'verdictReasons']) { $(id).hidden = true; }
       return;
     }
     const entry = planPick(view);
@@ -1279,7 +1330,6 @@
       if (text) { list.appendChild(make('li', '', text)); }
     }
     list.hidden = !list.firstChild;
-    setLine('verdictNote', '');
   }
 
   // DWD-Text in der Sprache der Oberfläche: Deutsch aus den _de-Feldern, alle anderen aus den _en-Feldern
@@ -1407,9 +1457,9 @@
   // den Aufheizzeiten aus place.heat. Alle Zeiten sind Ortszeit des Orts (view.m.tz), nie die des Geräts.
 
   // Erster Buchstabe groß: planNow, planToday und planDay sind Satzteile („jetzt“), hier stehen sie am Zeilenanfang
-  function upFirst(text) {
+  function upFirst(text, lang) {
     const chars = Array.from(text);
-    return chars.length ? chars[0].toLocaleUpperCase(i18n.lang) + chars.slice(1).join('') : text;
+    return chars.length ? chars[0].toLocaleUpperCase(lang) + chars.slice(1).join('') : text;
   }
 
   // Zweite Meinung (MOSMIX) zählt nur, wenn die Station nah genug liegt (Abschnitt 8, MOSMIX-Regel)
@@ -1427,33 +1477,32 @@
   }
 
   // „Heute Nacht“, „Morgen Nacht“, danach der Wochentag („Mittwoch Nacht“). Die Nacht gehört zum Abend ihres Tags.
-  function nightName(view, night) {
+  // Rein, zt aus timeFmt(view).
+  function nightName(view, night, zt) {
     const off = night.dayIdx - view.todayIdx;
     let day;
     if (off === 0) {
-      day = t('dayToday');
+      day = zt.t('dayToday');
     } else if (off === 1) {
-      day = t('dayTomorrow');
+      day = zt.t('dayTomorrow');
     } else {
       const own = view.m.days[night.dayIdx];
-      day = own ? i18n.fmt.wday(dayMs(view, own), view.m.tz, i18n.lang, true) : '';
+      day = own ? zt.wday(dayMs(view, own)) : '';
     }
-    return t('planNightOf', { day });
+    return zt.t('planNightOf', { day });
   }
 
   // Zeile mit dem Start: „Jetzt“, wenn er fällig ist; sonst „Start ab 15:00“. Nur wenn der Start nicht auf den Tag
   // der Nacht fällt (lange Aufheizzeit, früher Beginn der Abkühlung), steht der Tag davor: „Heute ab 22:00“ oder
-  // „Montag ab 22:00“.
-  function planWhen(view, entry, night, due) {
-    const f = i18n.fmt;
-    const tz = view.m.tz;
-    if (due) { return upFirst(t('planNow')); }
-    const time = f.time(entry.startMs, tz);
-    const startKey = weather.dayKeyOf(entry.startMs, tz);
+  // „Montag ab 22:00“. Rein, zt aus timeFmt(view).
+  function planWhen(view, entry, night, due, zt) {
+    if (due) { return upFirst(zt.t('planNow'), zt.lang); }
+    const time = zt.time(entry.startMs);
+    const startKey = zt.dayKey(entry.startMs);
     const own = view.m.days[night.dayIdx];
-    if (own && startKey === own.key) { return t('planStart', { time }); }
-    if (startKey === view.now.key) { return upFirst(t('planToday', { time })); }
-    return upFirst(t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time }));
+    if (own && startKey === own.key) { return zt.t('planStart', { time }); }
+    if (startKey === view.now.key) { return upFirst(zt.t('planToday', { time }), zt.lang); }
+    return upFirst(zt.t('planDay', { day: zt.wday(entry.startMs), time }), zt.lang);
   }
 
   // Die Zeilen des Fahrplans als fertiger Text, je Nacht eine Karte: [{ head, lines: [{ cls, text }] }].
@@ -1512,6 +1561,7 @@
   function planFmt(view) {
     const f = i18n.fmt;
     const tz = view.m.tz;
+    const zt = timeFmt(view);
     return {
       t,
       time: (ms) => f.time(ms, tz),
@@ -1519,9 +1569,9 @@
       num: numAuto,
       todayIdx: view.todayIdx,
       mosNear: mosNear(view.m),
-      nightName: (night) => nightName(view, night),
+      nightName: (night) => nightName(view, night, zt),
       isDue: (entry, night) => heat.isDue(entry, view.now.ms, night.toMs),
-      startLine: (entry, night, due) => planWhen(view, entry, night, due)
+      startLine: (entry, night, due) => planWhen(view, entry, night, due, zt)
     };
   }
 
@@ -1702,7 +1752,10 @@
     }
   }
 
-  // Nur für Node-Tests (tests/app.test.js): die reinen Zeilenfunktionen von Ampel, Fahrplan und Statuszeile. Im Browser
-  // gibt es kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
-  if (typeof module !== 'undefined' && module.exports) { module.exports = { verdictLines, planRows, statusLines }; }
+  // Nur für Node-Tests (tests/app.test.js): die reinen Funktionen von Ampel, Fahrplan, Statuszeile, Jetzt-Block,
+  // Umriss und Hausnummer sowie die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt). Im Browser gibt
+  // es kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen };
+  }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
