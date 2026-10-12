@@ -740,3 +740,23 @@ test('Fußzeile: die Texte nennen Quelle und Lizenz, die Datenschutzzeile trägt
   assert.match(de.footerPrivacy, /\(oder einmal dein auf etwa 100 m gerundeter Standort\)/);
   assert.equal(de.footerExternal, 'öffnet fremde Seite');
 });
+
+test('Service Worker: Registrierung in init() nur über https oder localhost, Fehler landen in der Konsole', () => {
+  const reg = funktion(appCode, 'registerWorker');
+  assert.ok(reg.includes("'serviceWorker' in navigator"));
+  assert.ok(reg.includes("location.protocol !== 'https:' && location.hostname !== 'localhost'"));
+  assert.ok(reg.includes("navigator.serviceWorker.register('./sw.js').catch(console.error)"));
+  assert.ok(!reg.includes('/claude/'), 'kein Sonderfall wie in der Bürg-Fassung');
+  assert.ok(funktion(appCode, 'init').includes('registerWorker();'), 'init() ruft die Registrierung');
+});
+
+test('Manifest und Kopf: Manifest-Link, theme-color, Manifest ohne id in Meilenstein 1', () => {
+  const link = all.find((tg) => tg.name === 'link' && tg.attrs.rel === 'manifest');
+  assert.equal(link.attrs.href, './manifest.webmanifest');
+  const theme = all.find((tg) => tg.name === 'meta' && tg.attrs.name === 'theme-color');
+  assert.equal(theme.attrs.content, '#111821');
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
+  assert.equal(Object.prototype.hasOwnProperty.call(manifest, 'id'), false, 'Meilenstein 1 deployt ohne id (BAUPLAN Abschnitt 9)');
+  assert.equal(manifest.theme_color, '#111821');
+  assert.equal(manifest.background_color, '#111821');
+});
