@@ -5,7 +5,8 @@
  * Das Netz gibt es nicht: Open-Meteo, Bright Sky, Photon und die Höhenabfrage werden per page.route auf die
  * Dateien unter tests/fixtures umgeleitet; jede andere fremde Anfrage bricht ab und wäre ein Fehler.
  * Die Seitenuhr steht auf dem Fixture-Tag (13.01.2026 10:00 Europe/Berlin), sonst sagt die Ampel „zu alt“.
- * Wartezeiten laufen über page.clock.fastForward, nie über echtes Warten.
+ * Wartezeiten laufen über page.clock.fastForward und page.clock.runFor, nie über echtes Warten. Erwartete Sätze
+ * kommen aus den deutschen Planschlüsseln in js/i18n.js (I18N.de), nicht abgeschrieben aus der Oberfläche.
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
  * kommen mit den Meilensteinen 3 und 5 dazu.
@@ -15,6 +16,8 @@
 const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
+
+const { I18N } = require('../../js/i18n.js');
 
 const expect = base.expect;
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
@@ -30,6 +33,30 @@ const COORD = /^-?\d+\.\d{1,3}$/;
 
 // Marktstraße 1 aus photon-haus.json, wie Fall 7 sie als Standort vorgibt
 const HOME = { latitude: 48.8772683, longitude: 9.3964273 };
+
+// ---------------------------------------------------------------------------------------------
+// Erwartete Texte: immer der Schlüssel aus I18N.de, damit eine Textänderung den Smoke nicht still bricht
+// ---------------------------------------------------------------------------------------------
+
+function escapeRx(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Der deutsche Text eines Schlüssels; {x}-Platzhalter werden mit vars gefüllt, fehlende bleiben stehen
+function deText(key, vars) {
+  const s = I18N.de[key];
+  if (typeof s !== 'string' || s === '') { throw new Error('Schlüssel ' + key + ' fehlt in I18N.de'); }
+  return s.replace(/\{(\w+)\}/g, (m, k) => (vars && Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m));
+}
+
+// Ein Satz mit Platzhaltern als Muster: der feste Anteil wörtlich, jeder Platzhalter steht für beliebigen Text
+function deRx(key) {
+  return new RegExp(deText(key).split(/\{\w+\}/).map(escapeRx).join('.+?'));
+}
+
+// Satz 1 der Statuszeile mit Uhrzeit: der feste Anfang von statusStamp („Stand: “), danach eine Uhrzeit wie 9:00
+// (ohne führende Null, Eintrag zum Schritt „i18n“ in BAUPLAN Abschnitt 16)
+const STAMP_WITH_TIME = new RegExp(escapeRx(deText('statusStamp').split('{')[0]) + '.*\\d{1,2}:\\d{2}');
 
 // ---------------------------------------------------------------------------------------------
 // Rahmen: jeder Fall sammelt Fehler der Seite; ein nicht abgefangener Fehler lässt ihn scheitern
@@ -129,6 +156,34 @@ async function blockNet(page) {
 // Die Seitenuhr auf den Fixture-Tag, vor dem ersten goto
 async function startClock(page) {
   await page.clock.install({ time: NOW });
+}
+
+// Die Seitenuhr eine Sekunde weiterlaufen lassen (jeder bis dahin fällige Zeitgeber feuert, auch ein nachgeschobener)
+// und danach eine Runde durch den Seiten-Thread: Was die Zeitgeber anstoßen, ist dann gelaufen. Keine echte
+// Wartezeit (Abschnitt 12 „Uhr“); requestAnimationFrame hängt nach clock.install selbst an der Seitenuhr.
+async function settle(page) {
+  await page.clock.runFor(1000);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+}
+
+// Schreibt im Seiten-Thread jeden fetch()-Aufruf der App mit, im Augenblick des Aufrufs. Die Route-Zähler kommen
+// über den Browser-Prozess später an; für „es kam keine Anfrage“ zählt deshalb dieses Protokoll (vor dem goto).
+async function logFetches(page) {
+  await page.addInitScript(() => {
+    const original = window.fetch;
+    const seen = [];
+    Object.defineProperty(window, '__hwFetches', { value: seen });
+    window.fetch = function () {
+      const input = arguments[0];
+      seen.push(String(input && typeof input === 'object' && 'url' in input ? input.url : input));
+      return original.apply(window, arguments);
+    };
+  });
+}
+
+// Wie viele fetch()-Aufrufe der Seite gingen an eine Adresse, die part enthält
+function fetchesTo(page, part) {
+  return page.evaluate((p) => window.__hwFetches.filter((u) => u.includes(p)).length, part);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -235,14 +290,14 @@ async function walkScreens(page, net, check) {
   await visit('S2 Adresse');
 
   await page.locator('#btnSearch').click();
-  await expect(page.locator('#err-address')).toContainText('Heizwarte braucht Ort oder Postleitzahl');
+  await expect(page.locator('#err-address')).toContainText(deText('errNeedPlace'));
   await visit('S2 mit Fehlerzeile (Ort fehlt)');
 
   await fillAddress(page);
   const hits = net.on.photon;
   net.on.photon = (route) => answer(route, fixtureText('photon-leer.json'));
   await page.locator('#btnSearch').click();
-  await expect(page.locator('#err-address')).toContainText('nichts gefunden');
+  await expect(page.locator('#err-address')).toContainText(deText('errNoHit'));
   await expect(page.locator('#btnCityOnly')).toBeVisible();
   await visit('S2 mit Fehlerzeile (nichts gefunden)');
 
@@ -288,7 +343,7 @@ test('Fall 1: Einrichtung nur mit der Tastatur, mehrere Treffer', async ({ page 
 
   // S2: Enter in Straße und PLZ springt weiter, Enter im Ortsfeld sucht
   await expect(page.locator('#s-address')).toBeVisible();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 1 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 4 }));
   await expectFocusOnHeading(page, 's-address');
   await tabTo(page, '#f-street');
   await page.keyboard.type('Marktstraße 1');
@@ -302,21 +357,21 @@ test('Fall 1: Einrichtung nur mit der Tastatur, mehrere Treffer', async ({ page 
 
   // S3: der erste Treffer mit der Leertaste
   await expect(page.locator('#s-hits')).toBeVisible();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 2 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 2, of: 4 }));
   await expectFocusOnHeading(page, 's-hits');
   await tabTo(page, '#hitList .hit');
   await page.keyboard.press('Space');
 
   // S4: „Ja, das stimmt“ mit Enter
   await expect(page.locator('#s-confirm')).toBeVisible();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 3 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 3, of: 4 }));
   await expectFocusOnHeading(page, 's-confirm');
   await tabTo(page, '#btnConfirmYes');
   await page.keyboard.press('Enter');
 
   // S5: „Fertig“ mit der Leertaste
   await expect(page.locator('#s-profile')).toBeVisible();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 4 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 4, of: 4 }));
   await expectFocusOnHeading(page, 's-profile');
   await tabTo(page, '#btnDone');
   await page.keyboard.press('Space');
@@ -353,13 +408,13 @@ test('Fall 1: Einrichtung mit nur einem Treffer, Zurück führt zu S2 mit gefül
   // S3 entfällt, der Zähler in S4 bleibt „3 von 4“
   await expect(page.locator('#s-confirm')).toBeVisible();
   await expect(page.locator('#s-hits')).toBeHidden();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 3 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 3, of: 4 }));
   await expectFocusOnHeading(page, 's-confirm');
 
   await tabTo(page, '#btnConfirmNo');
   await page.keyboard.press('Enter');
   await expect(page.locator('#s-address')).toBeVisible();
-  await expect(page.locator('#setupStep')).toHaveText('Schritt 1 von 4');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 4 }));
   await expectFocusOnHeading(page, 's-address');
   await expect(page.locator('#f-street')).toHaveValue('Marktstraße 1');
   await expect(page.locator('#f-zip')).toHaveValue('71364');
@@ -385,7 +440,8 @@ test('Fall 3: keine horizontale Scrollleiste, Fußzeilen-Links mit Text und Hinw
       const links = page.locator('footer a[href^="http"]');
       await expect(links, 'drei Links in der Fußzeile: ' + lang + ', ' + where).toHaveCount(3);
       for (const a of await links.all()) {
-        expect((await a.textContent()).trim(), 'Linktext: ' + lang + ', ' + where).not.toBe('');
+        const shown = (await a.locator('span[data-i18n]:not(.visually-hidden)').textContent()).trim();
+        expect(shown, 'sichtbarer Linktext: ' + lang + ', ' + where).not.toBe('');
         const hint = (await a.locator('.visually-hidden').textContent()).trim();
         expect(hint, 'versteckter Hinweis: ' + lang + ', ' + where).not.toBe('');
       }
@@ -416,6 +472,7 @@ test('Fall 5: ein h1, keine übersprungene Überschriftenstufe', async ({ page }
 test.describe('Fall 6: Fehlerwege enden in einem Knopf', () => {
   test('Ort und PLZ leer, nichts gefunden, kein Netz, Photon bittet um Pause', async ({ page }) => {
     const net = await mockNet(page);
+    await logFetches(page);
     await startClock(page);
     await page.goto('/');
     await page.locator('#btnByAddress').click();
@@ -424,7 +481,7 @@ test.describe('Fall 6: Fehlerwege enden in einem Knopf', () => {
     // Ort und PLZ leer: Satz im Alert, kein Netzaufruf, Fokus im Ortsfeld
     await page.locator('#btnSearch').click();
     await expect(page.locator('#err-address')).toHaveAttribute('role', 'alert');
-    await expect(page.locator('#err-address')).toContainText('Heizwarte braucht Ort oder Postleitzahl, um die Straße zu finden.');
+    await expect(page.locator('#err-address')).toContainText(deText('errNeedPlace'));
     expect(net.count('photon')).toBe(0);
     await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.id)).toBe('f-city');
 
@@ -432,31 +489,34 @@ test.describe('Fall 6: Fehlerwege enden in einem Knopf', () => {
     await fillAddress(page);
     net.on.photon = (route) => answer(route, fixtureText('photon-leer.json'));
     await page.locator('#btnSearch').click();
-    await expect(page.locator('#err-address')).toContainText('Zu dieser Adresse hat Heizwarte nichts gefunden.');
+    await expect(page.locator('#err-address')).toContainText(deText('errNoHit'));
     await expect(page.locator('#f-street')).toHaveValue('Marktstraße 1');
     await expect(page.locator('#f-zip')).toHaveValue('71364');
     await expect(page.locator('#f-city')).toHaveValue('Winnenden');
     await expect(page.locator('#btnCityOnly')).toBeVisible();
-    await expect(page.locator('#btnCityOnly')).toHaveText('Nur den Ort suchen');
+    await expect(page.locator('#btnCityOnly')).toHaveText(deText('btnCityOnly'));
     expect(net.count('photon')).toBe(1);
 
     // kein Netz: Satz und „Noch einmal versuchen“
     net.on.photon = (route) => route.abort();
     await page.locator('#btnSearch').click();
-    await expect(page.locator('#err-address')).toContainText('Gerade geht keine Verbindung.');
+    await expect(page.locator('#err-address')).toContainText(deText('errOfflineSearch'));
     await expect(page.locator('#btnAddrRetry')).toBeVisible();
-    await expect(page.locator('#btnAddrRetry')).toHaveText('Noch einmal versuchen');
+    await expect(page.locator('#btnAddrRetry')).toHaveText(deText('btnRetry'));
 
     // Photon bittet um Pause (429): Satz und Knopf, aber kein automatischer Wiederholungsversuch
     net.reset();
     net.on.photon = (route) => route.fulfill({ status: 429, headers: { 'access-control-allow-origin': '*' }, body: '' });
     await page.locator('#btnAddrRetry').click();
     await expect(page.locator('#err-address')).toHaveAttribute('role', 'alert');
-    await expect(page.locator('#err-address')).toContainText('Die Ortssuche ist gerade ausgelastet.');
+    await expect(page.locator('#err-address')).toContainText(deText('errSearchRejected'));
     await expect(page.locator('#btnAddrRetry')).toBeVisible();
     expect(net.count('photon')).toBe(1);
+    const asked = await fetchesTo(page, 'photon.komoot.io/api');
+    expect(asked, 'das Protokoll sieht die Photon-Aufrufe der Seite').toBeGreaterThanOrEqual(1);
     await page.clock.fastForward(61000);
-    await page.waitForTimeout(300);
+    await settle(page);
+    expect(await fetchesTo(page, 'photon.komoot.io/api'), 'die Seite fragt Photon nicht von selbst erneut').toBe(asked);
     expect(net.count('photon'), 'Photon wird nicht von selbst wiederholt').toBe(1);
   });
 
@@ -469,7 +529,7 @@ test.describe('Fall 6: Fehlerwege enden in einem Knopf', () => {
     await fillAddress(page);
     await page.locator('#btnSearch').click();
     await pickFirstHit(page);
-    await expect(page.locator('#c-elevVal')).toHaveText('Höhe: unbekannt. Du kannst sie eintragen oder weitergehen.');
+    await expect(page.locator('#c-elevVal')).toHaveText(deText('setupElevUnknown'));
     await page.locator('#btnConfirmYes').click();
     await expect(page.locator('#s-profile')).toBeVisible();
     expect(net.count('elevation')).toBe(1);
@@ -484,8 +544,8 @@ test.describe('Fall 6: Fehlerwege enden in einem Knopf', () => {
     await page.goto('/');
     await page.locator('#btnByLocation').click();
     await expect(page.locator('#s-confirm')).toBeVisible();
-    await expect(page.locator('#setupStep')).toHaveText('Schritt 1 von 2');
-    await expect(page.locator('#c-label')).toHaveText('Dein Standort');
+    await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 2 }));
+    await expect(page.locator('#c-label')).toHaveText(deText('setupMyPlace'));
     await expect(page.locator('#c-line2')).toHaveText('48,877 / 9,396');
     expect(net.count('reverse')).toBe(1);
     expect(net.count('photon')).toBe(0);
@@ -536,10 +596,10 @@ test.describe('Fall 7: nur gerundete Koordinaten, nie Straße oder PLZ (DoD 5)',
     await page.goto('/');
     await page.locator('#btnByLocation').click();
     await expect(page.locator('#s-confirm')).toBeVisible();
-    await expect(page.locator('#setupStep')).toHaveText('Schritt 1 von 2');
+    await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 2 }));
     await page.locator('#btnConfirmYes').click();
     await expect(page.locator('#s-profile')).toBeVisible();
-    await expect(page.locator('#setupStep')).toHaveText('Schritt 2 von 2');
+    await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 2, of: 2 }));
     await page.locator('#btnDone').click();
     await expect(page.locator('#nowTemp')).toContainText('°');
     await expect.poll(() => net.count('weather')).toBeGreaterThanOrEqual(1);
@@ -574,15 +634,14 @@ test('Fall 8: 429 vom Wetterdienst zeigt statusWaiting, nach 60 s kommen die Dat
   await page.locator('#btnDone').click();
 
   await expect(page.locator('#s-main')).toBeVisible();
-  await expect(page.locator('#status')).toContainText('Der Wetterdienst ist gerade ausgelastet.');
-  await expect(page.locator('#status')).toContainText('in 60 Sekunden');
+  await expect(page.locator('#status')).toContainText(deText('statusWaiting', { s: 60 }));
   await expect(page.locator('#nowTemp')).not.toContainText('°');
   expect(net.count('forecast')).toBe(1);
 
   await page.clock.fastForward(60000);
   await expect(page.locator('#nowTemp')).toContainText('°');
-  await expect(page.locator('#status')).toContainText('Stand:');
-  await expect(page.locator('#status')).not.toContainText('ausgelastet');
+  await expect(page.locator('#status')).toContainText(STAMP_WITH_TIME);
+  await expect(page.locator('#status')).not.toContainText(deRx('statusWaiting'));
   expect(net.count('forecast'), 'genau ein zweiter Versuch').toBe(2);
 });
 
@@ -621,9 +680,8 @@ test('Fall 9: Offline-Stand aus dem Service-Worker-Cache, Selbstheilung nach fre
   await page.reload();
   await expect(page.locator('#s-main')).toBeVisible();
   await expect(page.locator('#nowTemp')).toContainText('°');
-  await expect(page.locator('#status')).toContainText('Stand:');
-  await expect(page.locator('#status')).toContainText('Veraltet');
-  await expect(page.locator('#status')).toContainText('gerade keine Verbindung');
+  await expect(page.locator('#status')).toContainText(STAMP_WITH_TIME);
+  await expect(page.locator('#status')).toContainText(deText('statusOffline'));
   // die App versucht den Abruf trotzdem (bei jedem Start neu laden)
   await expect.poll(() => blocked.count('openMeteo')).toBeGreaterThanOrEqual(1);
   expect(net.log.stray, 'Anfragen ohne Route (vor dem Offline-Schritt)').toEqual([]);
@@ -632,16 +690,20 @@ test('Fall 9: Offline-Stand aus dem Service-Worker-Cache, Selbstheilung nach fre
 
 test('Fall 10: visibilitychange ruft erneut ab, aber nicht innerhalb von 60 Sekunden', async ({ page }) => {
   const net = await mockNet(page);
+  await logFetches(page);
   await startClock(page);
   await setUpByClicks(page);
   const first = net.count('forecast');
+  const firstInPage = await fetchesTo(page, '/v1/forecast');
+  expect(firstInPage, 'das Protokoll sieht die Abrufe der Seite').toBeGreaterThanOrEqual(1);
   expect(first).toBeGreaterThanOrEqual(1);
 
   const dispatch = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
   // innerhalb der 60 Sekunden bleibt es beim einen Abruf (Flatterschutz)
   await dispatch();
-  await page.waitForTimeout(300);
+  await settle(page);
+  expect(await fetchesTo(page, '/v1/forecast'), 'kein Abruf innerhalb von 60 s (Seite)').toBe(firstInPage);
   expect(net.count('forecast'), 'kein Abruf innerhalb von 60 s').toBe(first);
 
   // danach löst der Wechsel zurück in die App einen neuen Abruf aus

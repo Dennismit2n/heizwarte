@@ -11,7 +11,8 @@
  *       relativ zur Quelldatei, mit ./ davor, in SHELL (Manifest icon-512.png → ./icon-512.png,
  *       CSS ../assets/fonts/… → ./assets/fonts/…). data:, http(s): und #… zählen nicht.
  *   (3) Jeder SHELL-Eintrag stammt aus (1) oder (2); feste Ausnahmen nur ./ und ./index.html.
- *   (4) Jeder SHELL-Eintrag existiert ohne ?v= als Datei im Repo (./ ist index.html).
+ *   (4) Jeder SHELL-Eintrag existiert ohne ?v= als Datei im Repo (./ ist index.html), in genau dieser
+ *       Schreibweise (GitHub Pages unterscheidet Groß und Klein, NTFS nicht).
  *   (5) Alle ?v= sind gleich, CACHE heißt heizwarte-v<n>, das Manifest hat start_url ./, scope ./ und
  *       display standalone, ORDER in tests/_load.js entspricht der Skriptreihenfolge in index.html.
  *
@@ -135,9 +136,20 @@ function dateiVon(eintrag) {
   return voll;
 }
 
+// Die Datei gibt es genau in dieser Schreibweise. Windows (NTFS) und damit fs.existsSync und der Dev-Server finden
+// ./INDEX.html auch als index.html, GitHub Pages nicht: dort wäre der Eintrag ein 404 und addAll scheiterte. Darum
+// muss jeder Pfadteil wörtlich im Verzeichnis darüber stehen.
 function existiert(eintrag) {
   const datei = dateiVon(eintrag);
-  return datei !== null && fs.existsSync(datei) && fs.statSync(datei).isFile();
+  if (datei === null) { return false; }
+  let ordner = ROOT;
+  for (const teil of path.relative(ROOT, datei).split(path.sep)) {
+    let namen;
+    try { namen = fs.readdirSync(ordner); } catch (e) { return false; }
+    if (!namen.includes(teil)) { return false; }
+    ordner = path.join(ordner, teil);
+  }
+  return fs.statSync(ordner).isFile();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -293,6 +305,11 @@ test('beide Richtungen schlagen an: fehlender, überzähliger und nicht vorhande
   assert.equal(existiert('./css'), false, 'ein Ordner ist keine Datei');
   assert.equal(existiert('./../package.json'), false);
   assert.equal(existiert('index.html'), false, 'ohne ./ am Anfang');
+  // Groß/Klein muss stimmen, auch wenn das Dateisystem es nicht unterscheidet (GitHub Pages unterscheidet)
+  assert.equal(existiert('./INDEX.html'), false, 'INDEX.html ist nicht index.html');
+  assert.equal(existiert('./CSS/style.css?v=2026-10-12'), false, 'Ordner in anderer Schreibweise');
+  assert.equal(existiert('./js/App.js'), false, 'Datei in anderer Schreibweise');
+  assert.equal(existiert('./Icon-192.png'), false);
   assert.equal(ohneDatei(['./index.html', './gibt-es-nicht.js'], existiert).length, 1);
 });
 
@@ -393,4 +410,144 @@ test('index.html: keine style-Attribute, kein <style>, kein Inline-Skript, keine
 
 test('css/style.css: kein @import, damit keine Quelle an SHELL vorbei geladen wird', () => {
   assert.doesNotMatch(cssOhneKommentare, /@import/i);
+});
+
+// ---------------------------------------------------------------------------------------------
+// sw.js im Betrieb: am HTTP-Cache vorbei laden (Review Runde 3, Befund 3) und Rückfall ohne Netz
+// ---------------------------------------------------------------------------------------------
+
+// Wo der Worker liegt; relative Adressen in sw.js lösen sich dagegen auf, wie im Browser
+const SW_URL = 'https://dennismit2n.github.io/heizwarte/sw.js';
+const APP_URL = new URL('./', SW_URL).href;
+
+// sw.js in einer nachgebauten Worker-Umgebung: die Listener werden eingesammelt, caches und fetch sind Attrappen
+// mit Protokoll. netz: false lässt jedes fetch scheitern wie ohne Verbindung.
+function starteSw({ netz = true, vorher = [] } = {}) {
+  const listener = {};
+  const protokoll = { addAll: [], fetch: [] };
+  const ablage = new Map();
+  for (const u of vorher) { ablage.set(new URL(u, SW_URL).href, new Response('alt')); }
+  const schlüssel = (r) => (typeof r === 'string' ? new URL(r, SW_URL).href : r.url);
+  const cache = {
+    addAll: async (liste) => {
+      protokoll.addAll.push(liste);
+      for (const r of liste) { ablage.set(schlüssel(r), new Response('neu')); }
+    },
+    match: async (r) => { const t = ablage.get(schlüssel(r)); return t ? t.clone() : undefined; },
+    put: async (r, antwort) => { ablage.set(schlüssel(r), antwort); }
+  };
+  class SwRequest extends Request {
+    constructor(u, init) { super(typeof u === 'string' ? new URL(u, SW_URL) : u, init); }
+  }
+  const hülle = {
+    self: {
+      addEventListener: (typ, f) => { listener[typ] = f; },
+      location: new URL(SW_URL),
+      clients: { claim: async () => {} },
+      skipWaiting: async () => {}
+    },
+    caches: { open: async () => cache, keys: async () => [], delete: async () => true },
+    fetch: async (r, init) => {
+      protokoll.fetch.push({ url: schlüssel(r), init });
+      if (!netz) { throw new TypeError('Failed to fetch'); }
+      return new Response('vom Netz', { status: 200 });
+    },
+    Request: SwRequest,
+    Response,
+    URL,
+    console
+  };
+  vm.runInContext(lies('sw.js'), vm.createContext(hülle), { filename: 'sw.js', timeout: 2000 });
+  return { listener, protokoll, ablage };
+}
+
+// Ein fetch-Ereignis durchspielen: Antwort und alle Arbeit im Hintergrund abwarten
+async function holeUeberSw(sw, request) {
+  const hinten = [];
+  let antwort = null;
+  sw.listener.fetch({ request, respondWith: (p) => { antwort = p; }, waitUntil: (p) => { hinten.push(p); } });
+  assert.ok(antwort, 'fetch-Listener ruft respondWith nicht');
+  let ergebnis;
+  let fehler = null;
+  try { ergebnis = await antwort; } catch (e) { fehler = e; }
+  await Promise.all(hinten);
+  return { ergebnis, fehler };
+}
+
+// Eine Navigation wie im Browser (mode 'navigate' lässt sich in Node nicht bauen, darum ein schlichtes Objekt)
+function navigation(url) {
+  return { url: new URL(url, SW_URL).href, method: 'GET', mode: 'navigate' };
+}
+
+// Prüft eine addAll-Liste: genau SHELL, jede Adresse als Request mit cache 'reload'
+function pruefeNeuLaden(liste) {
+  assert.equal(liste.length, SHELL.length);
+  liste.forEach((r, i) => {
+    assert.equal(typeof r, 'object', SHELL[i] + ' geht als Text an addAll, also mit dem HTTP-Cache');
+    assert.equal(r.cache, 'reload', SHELL[i] + ' wird nicht am HTTP-Cache vorbei geladen');
+    assert.equal(r.url, new URL(SHELL[i], SW_URL).href);
+  });
+}
+
+test('sw.js: addAll steht genau einmal da (in fillShell), Installation und Selbstheilung laden darüber', () => {
+  const code = lies('sw.js').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  assert.equal((code.match(/\.addAll\(/g) || []).length, 1, 'addAll außerhalb von fillShell');
+  assert.match(code, /function fillShell\(cache\) \{\s*return cache\.addAll\(SHELL\.map\(u => new Request\(u, \{ cache: 'reload' \}\)\)\);\s*\}/);
+});
+
+test('sw.js: die Installation legt die ganze Hülle am HTTP-Cache vorbei ab (cache reload)', async () => {
+  const sw = starteSw();
+  let warten = null;
+  sw.listener.install({ waitUntil: (p) => { warten = p; } });
+  assert.ok(warten, 'install ruft waitUntil nicht');
+  await warten;
+  assert.equal(sw.protokoll.addAll.length, 1);
+  pruefeNeuLaden(sw.protokoll.addAll[0]);
+});
+
+test('sw.js: Navigation mit Netz fragt den Server (no-cache) und holt eine gelöschte Hülle am HTTP-Cache vorbei nach', async () => {
+  const sw = starteSw();
+  const { ergebnis, fehler } = await holeUeberSw(sw, navigation('./'));
+  assert.equal(fehler, null);
+  assert.equal(await ergebnis.text(), 'vom Netz');
+  assert.equal(sw.protokoll.fetch.length, 1);
+  assert.equal(sw.protokoll.fetch[0].init && sw.protokoll.fetch[0].init.cache, 'no-cache', 'Navigation ohne no-cache');
+  assert.equal(sw.protokoll.addAll.length, 1, 'die Hülle wurde nicht nachgeholt');
+  pruefeNeuLaden(sw.protokoll.addAll[0]);
+  // liegt die Hülle wieder da, holt die nächste Navigation sie nicht noch einmal
+  await holeUeberSw(sw, navigation('./'));
+  assert.equal(sw.protokoll.addAll.length, 1);
+});
+
+test('sw.js: gestempelte Dateien gehen ohne Zusatz ans Netz, nur Navigationen fragen mit no-cache', async () => {
+  const sw = starteSw({ vorher: SHELL });
+  const skript = SHELL.find((e) => e.startsWith('./js/app.js'));
+  const { ergebnis } = await holeUeberSw(sw, new Request(new URL(skript, SW_URL)));
+  assert.equal(await ergebnis.text(), 'alt', 'Altbestand zuerst (stale-while-revalidate)');
+  assert.equal(sw.protokoll.fetch.length, 1);
+  assert.equal(sw.protokoll.fetch[0].init, undefined);
+  assert.equal(sw.protokoll.addAll.length, 0, 'keine Selbstheilung bei Nicht-Navigation');
+});
+
+test('sw.js: Navigation ohne Netz und ohne Treffer bekommt ./index.html (Rückfall schon in M1, Review Runde 3)', async () => {
+  const sw = starteSw({ netz: false, vorher: SHELL });
+  const { ergebnis, fehler } = await holeUeberSw(sw, navigation('./nicht-im-cache.html'));
+  assert.equal(fehler, null, 'Navigation ohne Netz endet im Fehler statt in der App-Hülle');
+  assert.equal(await ergebnis.text(), 'alt');
+  assert.equal(sw.protokoll.addAll.length, 0);
+  // eine Nicht-Navigation ohne Treffer bekommt dagegen den Netzfehler
+  const datei = await holeUeberSw(sw, new Request(new URL('./gibt-es-nicht.js', SW_URL)));
+  assert.ok(datei.fehler instanceof TypeError);
+});
+
+test('sw.js: fremde Origin und POST laufen am Worker vorbei (kein respondWith)', () => {
+  const sw = starteSw();
+  for (const request of [
+    new Request('https://api.open-meteo.com/v1/forecast?latitude=48.877'),
+    new Request(APP_URL, { method: 'POST', body: 'x' })
+  ]) {
+    let antwortet = false;
+    sw.listener.fetch({ request, respondWith: () => { antwortet = true; }, waitUntil: () => {} });
+    assert.equal(antwortet, false, request.method + ' ' + request.url);
+  }
 });

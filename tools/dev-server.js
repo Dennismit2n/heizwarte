@@ -8,6 +8,19 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const PORT = process.env.PORT || 8619;
 
+// Wie GitHub Pages: der Pfad muss in genau dieser Schreibweise da sein. Windows (NTFS) fände INDEX.html sonst
+// auch als index.html, und ein Groß/Klein-Fehler bliebe in jedem lokalen Test unsichtbar.
+function exakt(file) {
+  let ordner = ROOT;
+  for (const teil of path.relative(ROOT, file).split(path.sep)) {
+    let namen;
+    try { namen = fs.readdirSync(ordner); } catch (e) { return false; }
+    if (!namen.includes(teil)) return false;
+    ordner = path.join(ordner, teil);
+  }
+  return true;
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -36,6 +49,7 @@ http.createServer((req, res) => {
   const file = path.normalize(path.join(ROOT, p));
   // ROOT plus Trenner prüfen, sonst käme ein Nachbarordner wie "heizwarte-foo" durch
   if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end(); return; }
+  if (!exakt(file)) { res.writeHead(404); res.end('not found'); return; }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     res.writeHead(200, {
