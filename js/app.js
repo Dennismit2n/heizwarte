@@ -1381,7 +1381,7 @@
       return;
     }
     const f = i18n.fmt;
-    rootStyle.setProperty('--t', chart.tcol(cur.temp));
+    rootStyle.setProperty('--t', chart.tcol(cur.temp, undefined, currentScheme()));
     $('nowTemp').textContent = f.deg(cur.temp, 0);
     setSvg($('nowIcon'), chart.icon(cur.code, cur.isDay, 34));
     $('nowCond').textContent = i18n.wmo(cur.code);
@@ -1598,15 +1598,16 @@
       cond.appendChild(make('span', '', i18n.wmo(day.code)));
       card.appendChild(cond);
     }
-    // Die Zahlen der Spanne tragen die Temperaturfarbe; der Satz daneben sagt dasselbe in Worten
+    // Die Zahlen der Spanne tragen die Temperaturfarbe (des gerade geltenden Schemas); der Satz daneben sagt dasselbe in Worten
+    const scheme = currentScheme();
     if (isNum(day.min)) {
       const p = make('p', 'day-range', t('dayMin', { t: f.deg(day.min, 0) }));
-      p.style.color = chart.tcol(day.min);
+      p.style.color = chart.tcol(day.min, undefined, scheme);
       card.appendChild(p);
     }
     if (isNum(day.max)) {
       const p = make('p', 'day-range', t('dayMax', { t: f.deg(day.max, 0) }));
-      p.style.color = chart.tcol(day.max);
+      p.style.color = chart.tcol(day.max, undefined, scheme);
       card.appendChild(p);
     }
     if (isNum(day.rain) && day.rain >= 0.2) { card.appendChild(make('p', '', t('dayRain', { mm: f.num(day.rain, 1) }))); }
@@ -1770,9 +1771,18 @@
   }
 
   // Zeichnet den Hauptbildschirm neu, Block für Block; scheitert einer, laufen die übrigen weiter
+  // Farbskala unter der Kurve (#scale): der Verlauf folgt dem Schema. Das Element gehört zur Kurve, die ein späterer
+  // Schritt baut; solange es in index.html fehlt, tut die Funktion nichts. Deshalb document.getElementById statt $():
+  // markup.test.js verlangt für jede $()-ID einen Platz im Markup. setProperty ist CSSOM und mit der CSP vereinbar.
+  function renderScale() {
+    const el = document.getElementById('scale');
+    if (el) { el.style.setProperty('background', chart.scaleCss(currentScheme())); }
+  }
+
   function render() {
     if (!state.place) { return; }
     guard(renderHead);
+    guard(renderScale);
     const view = guard(buildView);
     state.verdict = view ? view.v : null;
     guard(renderStatus);
@@ -2234,6 +2244,24 @@
     }
   }
 
+  // Farbschema für chart.tcol und chart.scaleCss: 'light' oder 'dark'. Eine Wahl in den Einstellungen (data-theme am
+  // <html>) gilt vor dem System; bei „System“ entscheidet prefers-color-scheme: light, sonst dunkel (wie die CSS-Blöcke).
+  // schemeOf ist rein, currentScheme liest data-theme und matchMedia.
+  function schemeOf(attr, prefersLight) {
+    if (attr === 'light' || attr === 'dark') { return attr; }
+    return prefersLight ? 'light' : 'dark';
+  }
+
+  function currentScheme() {
+    const attr = document.documentElement.dataset.theme;
+    let prefersLight = false;
+    if (typeof root.matchMedia === 'function') {
+      const mq = root.matchMedia('(prefers-color-scheme: light)');
+      prefersLight = !!(mq && mq.matches);
+    }
+    return schemeOf(attr, prefersLight);
+  }
+
   // Das Theme hat gewechselt (Auswahl in den Einstellungen oder das System): was app.js aus dem Theme ableitet, neu
   // zeichnen. Ist der Hauptbildschirm nicht zu sehen, zeichnet showMain() beim Zurückkehren ohnehin alles neu.
   function onSchemeChange() {
@@ -2451,13 +2479,13 @@
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
   // afterDelete, cleanLabel), die Ortsliste
-  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher) und das Theme (THEME_COLOR, themeOf, applyTheme). Im Browser gibt es kein module, app.js
+  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher) und das Theme (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
-      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme
+      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
