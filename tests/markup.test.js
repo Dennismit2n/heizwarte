@@ -472,3 +472,135 @@ test('Stufen- und Aufladungs-Schlüssel, die app.js aus Zeichenkette und Zahl ba
     assert.ok(app.includes("case '" + k + "'"), 'reasonText kennt ' + k);
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// Statuszeile, Neu laden, Fehlerwege (BAUPLAN Abschnitt 8, Block 1 und 2; Abschnitt 5 app)
+// ---------------------------------------------------------------------------------------------
+
+// Der Quelltext einer Funktion von „function name(“ bis zur nächsten Funktion auf Einrückungsstufe 2
+function funktion(code, name) {
+  const start = code.indexOf('function ' + name + '(');
+  assert.ok(start >= 0, 'function ' + name + ' fehlt in app.js');
+  const rest = code.slice(start + 1);
+  const next = rest.search(/\n  (?:async )?function \w+\(/);
+  return next < 0 ? code.slice(start) : code.slice(start, start + 1 + next);
+}
+
+const appCode = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+
+test('Statuszeile: ein leeres <p> mit aria-live direkt nach dem Kopf, gefüllt wird sie nur mit Textknoten', () => {
+  const st = byId.get('status');
+  assert.equal(st.name, 'p');
+  assert.equal(st.attrs['aria-live'], 'polite');
+  assert.equal(st.attrs.hidden, undefined, 'eine verborgene Live-Region liest ihren ersten Inhalt nicht vor');
+  assert.match(html, /<p id="status" aria-live="polite"><\/p>/, 'leer im Markup, app.js schreibt hinein');
+  const kopf = funktion(appCode, 'renderStatus');
+  assert.doesNotMatch(kopf, /innerHTML|insertAdjacentHTML|outerHTML/);
+  assert.match(kopf, /make\('span', l\.cls, l\.text\)/, 'jeder Satz ein <span> mit textContent');
+  // die Zeile wird nur neu geschrieben, wenn sich ein Satz ändert (die Live-Region liest sonst jedes render() vor)
+  assert.match(kopf, /if \(sig === statusSig\) \{ return; \}/);
+});
+
+test('Statuszeile: render, refresh und onWait ziehen sie nach; sie hängt am Zustand und nicht an einer Zahl', () => {
+  const render = funktion(appCode, 'render');
+  assert.ok(render.indexOf('state.verdict = ') < render.indexOf('guard(renderStatus);'), 'tooOld liest state.verdict');
+  assert.ok(render.indexOf('guard(renderStatus);') < render.indexOf('guard(() => renderNow(view));'), 'Stempel steht vor dem Jetzt-Block');
+  assert.match(funktion(appCode, 'onWait'), /state\.status = 'waiting';[\s\S]*guard\(renderStatus\);/);
+  const refresh = funktion(appCode, 'refresh');
+  assert.match(refresh, /state\.status = 'loading';\s*const job = fetchFor\(id\);\s*inflight\.set\(id, job\);\s*renderReload\(\);\s*guard\(renderStatus\);/);
+  assert.match(refresh, /if \(state\.status === null\) \{\s*state\.status = 'loading';\s*guard\(renderStatus\);/,
+    'zurück an einen Ort mit laufendem Abruf: „Wird aktualisiert“ statt einer Zeile ohne Zustand');
+  // die Formatierer: Stand in der Ortszeit, Grenze aus heat.THRESH, kein Date in der Statuszeile
+  const fmt = funktion(appCode, 'statusFmt');
+  assert.match(fmt, /staleHours: heat\.THRESH\.staleHours/);
+  assert.match(fmt, /f\.when\(ms, nowMs, tz, i18n\.lang\)/);
+  assert.match(fmt, /state\.model \? state\.model\.tz/);
+  assert.doesNotMatch(funktion(appCode, 'statusLines'), /new Date|Date\.now|Intl\.|getHours|toLocale/);
+  assert.match(funktion(appCode, 'renderStatus'), /tooOld: !!state\.verdict && state\.verdict\.level === null/);
+});
+
+test('Fehlerwege: jeder Abrufcode landet im Zustand der Tabelle, der alte Stand bleibt sichtbar', () => {
+  const fail = funktion(appCode, 'onFetchFailed');
+  assert.match(fail, /if \(id !== state\.activeId\) \{ return; \}/, 'ein nicht mehr aktiver Ort ändert die Anzeige nicht');
+  assert.match(fail, /if \(!state\.cache\) \{\s*state\.status = 'noCache';/);
+  assert.match(fail, /code === 'rate'\) \{\s*state\.status = 'rateLimited';/);
+  assert.match(fail, /code === 'offline' \|\| code === 'timeout'\) \{\s*state\.status = 'offline';/);
+  assert.match(fail, /\} else \{\s*state\.status = 'failed';/, 'http und invalid');
+  // der Cache wird beim Fehler nicht angefasst: weder geleert noch durch null ersetzt
+  assert.doesNotMatch(fail, /state\.cache = |state\.model = |loadCache\(\)/);
+  // nie stummes catch: erwartete Ausfälle als Warnung, alles andere als Fehler in der Konsole
+  assert.match(fail, /console\.warn\(/);
+  assert.match(fail, /console\.error\(failure\)/);
+  assert.doesNotMatch(appCode, /catch \([a-z]+\) \{\s*\}/, 'kein leeres catch');
+  // die Codes gibt es in weather.js wirklich
+  const weatherSrc = fs.readFileSync(path.join(ROOT, 'js', 'weather.js'), 'utf8');
+  for (const code of ['rate', 'invalid', 'http', 'offline', 'timeout']) {
+    assert.ok(weatherSrc.includes("'" + code + "'"), 'OpenMeteoError ' + code);
+  }
+  // render zeichnet nach dem Fehler aus dem vorhandenen Cache: Ampel und Fahrplan bleiben, nur die Zeile ändert sich
+  assert.match(fail, /render\(\);\s*\}\s*$/);
+});
+
+test('Neu laden: Knopf mit aria-disabled statt disabled, Klick hängt sich an den laufenden Abruf, Fokus bleibt', () => {
+  const reload = byId.get('reload');
+  assert.equal(reload.name, 'button');
+  assert.equal(reload.attrs['data-i18n'], 'btnReload');
+  assert.equal(reload.attrs.disabled, undefined);
+  assert.ok(has(de, 'btnReloading'));
+  // während des Abrufs trägt er btnReloading und aria-disabled; dasselbe Element, kein Austausch, also bleibt der Fokus
+  assert.match(funktion(appCode, 'renderReload'), /markBusy\(btn, state\.loading, state\.loading \? 'btnReloading' : 'btnReload'\)/);
+  const busy = funktion(appCode, 'markBusy');
+  assert.match(busy, /setAttribute\('aria-disabled', 'true'\)/);
+  assert.match(busy, /btn\.textContent = t\(labelKey\)/);
+  assert.doesNotMatch(busy, /replaceWith|replaceChildren|remove\(\)|\.blur\(|disabled = /);
+  assert.doesNotMatch(appCode, /setAttribute\('disabled'|\.disabled = /, 'nirgends ein echtes disabled');
+  // „Neu laden“ ruft immer ab (force) und nimmt einen laufenden Abruf mit
+  assert.match(appCode, /on\('reload', 'click', \(\) => \{ refresh\(true\); \}\)/);
+  assert.match(funktion(appCode, 'refresh'), /if \(inflight\.has\(id\)\) \{[\s\S]*return inflight\.get\(id\);/);
+  assert.match(css, /button\[aria-disabled="true"\]\s*\{/);
+});
+
+test('Abruf: beim Start und bei jeder Rückkehr in die App, mit dem 60-Sekunden-Flatterschutz', () => {
+  assert.match(appCode, /document\.addEventListener\('visibilitychange', onVisible\);/);
+  const visible = funktion(appCode, 'onVisible');
+  assert.match(visible, /document\.visibilityState === 'visible' && state\.place\) \{ refresh\(false\); \}/);
+  assert.match(appCode, /THROTTLE_MS = 60000;/);
+  assert.match(funktion(appCode, 'refresh'), /!force && Date\.now\(\) - state\.lastFetchMs < THROTTLE_MS/);
+  assert.match(funktion(appCode, 'init'), /showMain\(\);\s*refresh\(false\);/, 'Start: erst der Cache, dann der frische Abruf');
+});
+
+test('Speicherhinweise am Kopf: drei versteckte Zeilen mit Schlüssel, nach jedem Schreiben nachgezogen', () => {
+  const header = html.slice(html.indexOf('<header>'), html.indexOf('</header>'));
+  for (const [id, key] of [['noteBlocked', 'storageBlocked'], ['noteFull', 'storageFull'], ['noteNewer', 'storeNewer']]) {
+    const tg = byId.get(id);
+    assert.equal(tg.name, 'p');
+    assert.equal(tg.attrs['data-i18n'], key);
+    assert.equal(tg.attrs.hidden, '', id + ' ist ohne Anlass verborgen');
+    assert.ok(header.includes('id="' + id + '"'), id + ' steht im Seitenkopf, über allen Bildschirmen');
+    assert.ok(has(de, key));
+  }
+  // ganze Sätze ohne Platzhalter: der Satz trägt die Bedeutung, der Rahmen nur die Auffälligkeit
+  assert.doesNotMatch(de.storageBlocked + de.storageFull + de.storeNewer, /\{/);
+  const notes = funktion(appCode, 'updateNotes');
+  assert.match(notes, /\$\('noteBlocked'\)\.hidden = degraded !== 'blocked';/);
+  assert.match(notes, /\$\('noteFull'\)\.hidden = degraded !== 'full';/);
+  assert.match(notes, /\$\('noteNewer'\)\.hidden = !state\.newer;/);
+  // jedes Schreiben geht durch persist(), und das zieht den Hinweis nach (ein Speicher, der erst jetzt voll wird)
+  assert.match(funktion(appCode, 'persist'), /const ok = storage\.set\(key, value\);\s*updateNotes\(\);\s*return ok;/);
+  assert.equal((appCode.match(/storage\.set\(/g) || []).length, 1, 'storage.set steht nur in persist');
+  // neuere Fassung: nichts wird geschrieben
+  assert.match(funktion(appCode, 'persist'), /if \(state\.newer\) \{ return false; \}/);
+});
+
+test('Statuszeile: CSS trägt „⚠ Veraltet“ in der Warnfarbe, Symbol und Wort bleiben der eigentliche Träger', () => {
+  assert.match(css, /#status\s*\{\s*color: var\(--muted\);\s*\}/);
+  assert.match(css, /#status \.status-warn\s*\{\s*color: var\(--warn\);\s*\}/);
+  // die drei Klassen, die statusLines vergibt
+  for (const cls of ['status-stamp', 'status-info', 'status-warn']) {
+    assert.ok(appCode.includes("'" + cls + "'"), cls + ' fehlt in app.js');
+  }
+  // jeder Satz der Gruppe, der „veraltet“ meldet, beginnt mit dem Symbol (nie die Farbe allein)
+  for (const k of ['statusStale', 'statusOffline', 'statusRateLimited', 'errLoadFailed']) {
+    assert.match(de[k], /^⚠ Veraltet – /, k);
+  }
+});

@@ -2,8 +2,8 @@
  * Heizwarte — Zustand, Einrichtung, Rendern und Abruf. Als einzige Datei darf app.js beim Laden etwas tun.
  *
  * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und der Hauptbildschirm bis zum
- * Heizfahrplan: Kopfzeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 und 3 bis 7) samt Abruf
- * (refresh) mit Cache je Ort. Statuszeile, Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
+ * Heizfahrplan: Kopfzeile, Statuszeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 bis 7) samt
+ * Abruf (refresh) mit Cache je Ort. Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
  * nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
@@ -23,6 +23,8 @@
 
   // Ohne force ruft refresh() frühestens 60 Sekunden nach dem letzten Abruf noch einmal ab (Flatterschutz, Abschnitt 5 app)
   const THROTTLE_MS = 60000;
+  // So viele Sekunden nennt statusWaiting, wenn der Wetterdienst keine gültige Wartezeit mitgeteilt hat (Abschnitt 5 weather)
+  const WAIT_DEFAULT_S = 60;
   // So lange gilt der „current“-Block der Antwort als Jetzt-Wert; danach nimmt die Anzeige die Stunde der Prognose (Entwurf)
   const FRESH_MS = 90 * 60000;
 
@@ -74,7 +76,7 @@
     verdict: null,
     source: 'none',
     loading: false,
-    // Zustand der Statuszeile nach der Tabelle in Abschnitt 8 Punkt 2 (die Zeile selbst folgt im nächsten Schritt):
+    // Zustand der Statuszeile nach der Tabelle in Abschnitt 8 Punkt 2 (statusLines macht den Text daraus):
     // 'loading' | 'live' | 'offline' | 'failed' | 'waiting' | 'rateLimited' | 'noCache'; vor dem ersten Abruf null
     status: null,
     lastFetchMs: 0,
@@ -148,10 +150,14 @@
   // Speicher
   // ---------------------------------------------------------------------------------------------
 
-  // Schreibt nie, wenn die Daten von einer neueren Fassung stammen (Abschnitt 4, Migration Punkt 4)
+  // Schreibt nie, wenn die Daten von einer neueren Fassung stammen (Abschnitt 4, Migration Punkt 4). Nach jedem
+  // Schreiben zieht der Hinweis am Seitenkopf nach: Ein Speicher, der erst jetzt voll oder gesperrt ist, soll
+  // sofort sichtbar werden und nicht erst beim nächsten Start.
   function persist(key, value) {
     if (state.newer) { return false; }
-    return storage.set(key, value);
+    const ok = storage.set(key, value);
+    updateNotes();
+    return ok;
   }
 
   function isPlace(p) {
@@ -783,7 +789,6 @@
     s.fields = { street: '', zip: '', city: '' };
     s.hits = [];
     s.chosen = null;
-    updateNotes();
     goProfile();
   }
 
@@ -827,7 +832,6 @@
     const isNew = !s.reentry;
     applyHeatType(place, known ? selectedType() : 'radiator', known);
     persist('places', state.places);
-    updateNotes();
     showMain({ focusNow: true });
     if (isNew) { refresh(true); }
   }
@@ -878,6 +882,7 @@
     state.status = 'waiting';
     state.waitS = Math.ceil(ms / 1000);
     state.waitUntilMs = Date.now() + ms;
+    guard(renderStatus);
   }
 
   // Ergebnis eines Abrufs. Der Cache eines Orts wird immer geschrieben, auch wenn inzwischen ein anderer Ort aktiv
@@ -886,7 +891,6 @@
     const place = placeById(id);
     if (!place) { return; }
     persist('cache:' + id, result.cache);
-    updateNotes();
     const model = modelOf(result.cache);
     if (!place.tz && model) {
       place.tz = model.tz;
@@ -954,12 +958,20 @@
   function refresh(force) {
     const id = state.activeId;
     if (!id || !placeById(id)) { return Promise.resolve(); }
-    if (inflight.has(id)) { return inflight.get(id); }
+    if (inflight.has(id)) {
+      // Zurück an einen Ort gewechselt, dessen Abruf noch läuft: die Statuszeile kennt den Zustand noch nicht
+      if (state.status === null) {
+        state.status = 'loading';
+        guard(renderStatus);
+      }
+      return inflight.get(id);
+    }
     if (!force && Date.now() - state.lastFetchMs < THROTTLE_MS) { return Promise.resolve(); }
     state.status = 'loading';
     const job = fetchFor(id);
     inflight.set(id, job);
     renderReload();
+    guard(renderStatus);
     return job;
   }
 
@@ -1052,6 +1064,91 @@
     renderPlaces();
     $('heatHint').hidden = !(state.place && state.place.heat.confirmed === false);
     renderReload();
+  }
+
+  // Statuszeile (Abschnitt 8, Block 2): Stand und Zustand des Abrufs als zwei Sätze. Die einzige aria-live-Zeile.
+
+  // Die Sätze der Statuszeile als fertiger Text: [{ cls, text }]. Rein: kein DOM, keine Module, keine Gerätezeit.
+  //   st      { status, waitS, tooOld }: status wie state.status (null vor dem ersten Abruf), waitS die Wartezeit
+  //           in Sekunden (nur bei 'waiting'), tooOld wahr, wenn die Ampel wegen zu alter Daten keine Stufe hat
+  //           (verdict.level null)
+  //   cache   Cache des aktiven Orts oder null; gebraucht wird nur cache.fetched
+  //   nowMs   Jetzt in Epoch-Millisekunden
+  //   fmt     t(key, vars), staleHours (heat.THRESH.staleHours), when(ms, nowMs) in der Ortszeit des Orts,
+  //           rel(ms, nowMs) für „vor 3 Stunden“
+  // Satz 1 ist der Stand (status-stamp), sobald ein Cache da ist. Satz 2 je Zustand nach der Tabelle in Abschnitt 8:
+  // loading und waiting sind Hinweise (status-info), offline, failed und rateLimited beginnen selbst mit
+  // „⚠ Veraltet“ (status-warn), und zwar ohne Netz unabhängig vom Alter. Ab fmt.staleHours kommt statusStale dazu,
+  // auch mit Netz; ebenso bei tooOld, denn die Ampel sagt dann schon errTooOld und die Statuszeile nur „älter als
+  // einen Tag“. Ohne Cache gibt es keinen Stand: loading und waiting stehen allein, ein gescheiterter Abruf
+  // heißt statusNoData (jeder Weg endet bei „Neu laden“).
+  function statusLines(st, cache, nowMs, fmt) {
+    const status = st ? st.status : null;
+    const lines = [];
+    const add = (cls, key, vars) => { lines.push({ cls, text: fmt.t(key, vars) }); };
+    const waiting = () => {
+      const s = st && isNum(st.waitS) && st.waitS > 0 ? Math.round(st.waitS) : WAIT_DEFAULT_S;
+      add('status-info', 'statusWaiting', { s });
+    };
+
+    if (!cache || !isNum(cache.fetched)) {
+      if (status === 'loading') {
+        add('status-info', 'statusLoading');
+      } else if (status === 'waiting') {
+        waiting();
+      } else if (status === 'noCache' || status === 'offline' || status === 'failed' || status === 'rateLimited') {
+        add('status-info', 'statusNoData');
+      }
+      return lines;
+    }
+
+    // Geht die Geräteuhr zurück, liegt der Abruf scheinbar in der Zukunft: dann „jetzt“ statt „in 5 Minuten“
+    const fetched = cache.fetched;
+    lines.push({
+      cls: 'status-stamp',
+      text: fmt.t('statusStamp', { when: fmt.when(fetched, nowMs), ago: fmt.rel(Math.min(fetched, nowMs), nowMs) })
+    });
+    if (status === 'offline') { add('status-warn', 'statusOffline'); return lines; }
+    if (status === 'failed') { add('status-warn', 'errLoadFailed'); return lines; }
+    if (status === 'rateLimited') { add('status-warn', 'statusRateLimited'); return lines; }
+    if (status === 'loading') {
+      add('status-info', 'statusLoading');
+    } else if (status === 'waiting') {
+      waiting();
+    }
+    const ageH = (nowMs - fetched) / 3600000;
+    if (ageH > fmt.staleHours || (st && st.tooOld === true)) { add('status-warn', 'statusStale'); }
+    return lines;
+  }
+
+  // Die Formatierer für statusLines aus dem Stand der Seite: Sprache aus i18n, der Stand in der Ortszeit des Orts
+  function statusFmt() {
+    const f = i18n.fmt;
+    const tz = state.model ? state.model.tz : (state.place ? state.place.tz : null);
+    return {
+      t,
+      staleHours: heat.THRESH.staleHours,
+      when: (ms, nowMs) => f.when(ms, nowMs, tz, i18n.lang),
+      rel: (ms, nowMs) => f.rel(ms, nowMs, i18n.lang)
+    };
+  }
+
+  let statusSig = '';
+
+  // Schreibt die Zeile nur, wenn sich ein Satz geändert hat: Das Vorlesen der Live-Region soll nicht bei jedem
+  // render() von vorn beginnen. Der alte Stand bleibt stehen, bis der neue Zustand da ist.
+  function renderStatus() {
+    const st = { status: state.status, waitS: state.waitS, tooOld: !!state.verdict && state.verdict.level === null };
+    const lines = statusLines(st, state.cache, Date.now(), statusFmt());
+    const sig = lines.map((l) => l.cls + '|' + l.text).join('\n');
+    if (sig === statusSig) { return; }
+    statusSig = sig;
+    const box = $('status');
+    box.replaceChildren();
+    lines.forEach((l, i) => {
+      if (i > 0) { box.appendChild(document.createTextNode(' ')); }
+      box.appendChild(make('span', l.cls, l.text));
+    });
   }
 
   // Wetter jetzt: frisch (höchstens FRESH_MS alt) der „current“-Block der Antwort, sonst die Prognose-Stunde der
@@ -1451,6 +1548,7 @@
     guard(renderHead);
     const view = guard(buildView);
     state.verdict = view ? view.v : null;
+    guard(renderStatus);
     guard(() => renderNow(view));
     guard(() => renderVerdict(view));
     guard(() => renderAlerts(view));
@@ -1593,7 +1691,7 @@
       refresh(false);
     }
     document.addEventListener('visibilitychange', onVisible);
-    // Es folgen: Statuszeile, Einstellungen, Größenänderung der Kurve, Service Worker (spätere Schritte)
+    // Es folgen: Einstellungen, Größenänderung der Kurve, Service Worker (spätere Schritte)
   }
 
   if (typeof document !== 'undefined') {
@@ -1604,7 +1702,7 @@
     }
   }
 
-  // Nur für Node-Tests (tests/app.test.js): die zwei reinen Zeilenfunktionen von Ampel und Fahrplan. Im Browser gibt es
-  // kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
-  if (typeof module !== 'undefined' && module.exports) { module.exports = { verdictLines, planRows }; }
+  // Nur für Node-Tests (tests/app.test.js): die reinen Zeilenfunktionen von Ampel, Fahrplan und Statuszeile. Im Browser
+  // gibt es kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
+  if (typeof module !== 'undefined' && module.exports) { module.exports = { verdictLines, planRows, statusLines }; }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
