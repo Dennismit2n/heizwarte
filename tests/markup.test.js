@@ -336,10 +336,16 @@ test('Kopfzeile: Ortswahl mit sichtbarer Beschriftung, zwei Textknöpfe mit Schl
 
 test('Jetzt, Ampel, Warnungen, Tage: die Bausteine, die app.js füllt, stehen im Markup', () => {
   for (const id of ['nowBody', 'nowTemp', 'nowIcon', 'nowCond', 'nowFeels', 'nowWind', 'nowHumidity', 'nowNightMin',
-    'verdictTitle', 'verdictAction', 'verdictText', 'verdictReasons', 'verdictNote',
+    'verdictTitle', 'verdictAction', 'verdictText', 'verdictReasons',
     'alertLang', 'alertList', 'alertSource', 'alertUnavailable', 'dayList']) {
     assert.ok(byId.has(id), '#' + id);
   }
+  // Die Ampel hat immer eine sichtbare <h2>: ohne Stufe trägt sie levelNoData bzw. errTooOld (Review Runde 2, N4)
+  assert.equal(byId.get('verdictTitle').attrs.hidden, undefined, 'die Überschrift der Ampel ist nie verborgen');
+  assert.ok(!byId.has('verdictNote'), 'der Grund ohne Stufe steht in der Überschrift, nicht in einer eigenen Zeile');
+  const ampel = funktion(app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1'), 'renderVerdict');
+  assert.match(ampel, /setLine\('verdictTitle', view \? t\('errTooOld'\) : t\('levelNoData'\)\);/);
+  assert.doesNotMatch(ampel, /\['verdictTitle', 'verdictAction'/, 'die Überschrift wird ohne Stufe nicht versteckt');
   // Handlungssatz direkt nach der Stufenüberschrift, vor allem anderen (Punkt 4)
   const slice = screenSlice('s-main');
   const pos = (id) => slice.indexOf('id="' + id + '"');
@@ -422,12 +428,22 @@ test('Fahrplan: app.js verdrahtet Überschrift, Stärken, MOSMIX-Regel und Ortsz
   const plan = code.slice(code.indexOf('function upFirst'), code.indexOf('function render()'));
   assert.ok(plan.length > 1500, 'Fahrplan-Code nicht gefunden');
   assert.doesNotMatch(plan, /new Date|getHours|getMinutes|toLocaleTimeString|toLocaleDateString|Intl\./);
-  assert.match(plan, /f\.time\(entry\.startMs, tz\)/);
-  assert.match(plan, /weather\.dayKeyOf\(entry\.startMs, tz\)/);
+  // Startzeile und Satzteil der Ampel rechnen über zt (timeFmt): Uhrzeit, Wochentag und Kalendertag des Orts
+  assert.match(plan, /zt\.time\(entry\.startMs\)/);
+  assert.match(plan, /zt\.dayKey\(entry\.startMs\)/);
   assert.match(plan, /fmt\.time\(night\.atMs\)/);
   assert.match(plan, /fmt\.time\(entry\.onsetMs\)/);
   assert.match(plan, /time: \(ms\) => f\.time\(ms, tz\)/, 'planFmt rechnet jede Uhrzeit in der Ortszeit des Orts');
+  assert.match(plan, /const zt = timeFmt\(view\);/, 'planFmt reicht die Zeitformatierer an nightName und planWhen');
   assert.equal(plan.includes('view.m.tz'), true);
+  const zeit = funktion(code, 'timeFmt');
+  assert.match(zeit, /const tz = view\.m\.tz;/);
+  assert.match(zeit, /time: \(ms\) => f\.time\(ms, tz\)/);
+  assert.match(zeit, /wday: \(ms\) => f\.wday\(ms, tz, i18n\.lang, true\)/);
+  assert.match(zeit, /dayKey: \(ms\) => weather\.dayKeyOf\(ms, tz\)/);
+  for (const name of ['whenPhrase', 'nightName', 'planWhen']) {
+    assert.doesNotMatch(funktion(code, name), /i18n\.|weather\.|[^.\w]t\(|Date|Intl\./, name + ' ist rein und nimmt alles aus zt');
+  }
 });
 
 test('Fahrplan: CSS-Karte je Nacht, Hinweis im Rahmen statt nur in Farbe', () => {
@@ -443,12 +459,66 @@ test('Einstellungen: der Weg zurück ist da, kein Bildschirm ohne Ausgang', () =
   assert.ok(html.indexOf('id="btnSettingsBack"') < html.indexOf('data-i18n="settingsTitle"'), 'Zurück steht über der Überschrift');
 });
 
+test('Einrichtung: Kopf ist <h1>, Zähler, <h2>; „Zurück“ steht unten über dem Hauptknopf, nie vor der <h2>', () => {
+  // in keinem Bildschirm der Einrichtung steht ein Knopf vor der Überschrift (Abschnitt 6: Kopf h1 → setupStep → h2)
+  for (const id of ['s-welcome', 's-address', 's-hits', 's-confirm', 's-profile']) {
+    const folge = tags(screenSlice(id)).filter((tg) => tg.name === 'h2' || tg.name === 'button');
+    assert.equal(folge[0].name, 'h2', id + ': erst die Überschrift, dann die Knöpfe');
+  }
+  // S2: Zurück direkt über dem Hauptknopf „Suchen“, unter der Fehlerzeile und ihren Auswegen
+  const s2 = screenSlice('s-address');
+  assert.match(s2, /id="act-address"[\s\S]*<\/div>\s*<button type="button" class="back" id="btnAddrBack" data-i18n="btnBack"><\/button>\s*<div class="actions">\s*<button type="submit" class="primary" id="btnSearch"/);
+  // S3 hat keinen Hauptknopf: Zurück steht unter der Liste, neben „Keine passt?“ (Reihenfolge der Tabelle in Abschnitt 6)
+  const s3 = screenSlice('s-hits');
+  const pos3 = (needle) => s3.indexOf(needle);
+  assert.ok(pos3('<h2') < pos3('id="hitList"') && pos3('id="hitList"') < pos3('id="btnNoneFits"') &&
+    pos3('id="btnNoneFits"') < pos3('id="btnHitsBack"'), 'S3: h2, Liste, Keine passt?, Zurück');
+  assert.equal(byId.get('btnHitsBack').attrs['data-i18n'], 'btnBack');
+});
+
+test('Einrichtung: die Standortsuche sperrt nichts (Abbruch über „Mit Adresse“, eigene Frist, sichtbare Laufanzeige)', () => {
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+  // „Mit Adresse“ (und „Weiter“ aus der Fehlerzeile) bricht eine laufende Standortsuche ab, statt still zu verpuffen
+  const byAddress = funktion(code, 'onByAddress');
+  assert.match(byAddress, /if \(!s\) \{ return; \}\s*if \(s\.busy\) \{ cancelOps\(\); \}/);
+  assert.doesNotMatch(byAddress, /s\.busy\) \{ return; \}/);
+  assert.match(code, /on\('btnWelcomeNext', 'click', onByAddress\);/);
+  // eine eigene Frist über die ganze Standortabfrage, auch über die Zeit bis zur Erlaubnis; danach errGeoFailed
+  assert.match(code, /const LOCATE_DEADLINE_MS = 30000;/);
+  const frist = funktion(code, 'locateWithDeadline');
+  assert.match(frist, /new geo\.GeoError\('timeout'/);
+  assert.match(frist, /Promise\.race\(\[geo\.locate\(navigator\.geolocation\), deadline\]\)/);
+  assert.match(frist, /clearTimeout\(timer\)/);
+  const byLocation = funktion(code, 'onByLocation');
+  assert.match(byLocation, /await locateWithDeadline\(\)/);
+  assert.doesNotMatch(byLocation, /geo\.locate\(/, 'nie ohne Frist');
+  assert.match(funktion(code, 'onLocationFailure'), /code !== 'timeout'/, 'die Frist endet in errGeoFailed, nicht in der Konsole');
+  // auf S2 sitzt die Laufanzeige auf dem sichtbaren Hauptknopf, nicht auf dem versteckten Ausweg
+  assert.match(byLocation, /\$\(where === 'address' \? 'btnSearch' : 'btnByLocation'\)/);
+  assert.match(byLocation, /markBusy\(btn, false, idleKey\)/);
+  assert.match(funktion(code, 'resetBusyUi'), /markBusy\(\$\('btnSearch'\), false, 'setupSearch'\)/);
+});
+
+test('app.js: Umriss ohne feste Einheit, Heizart behält eigene Aufheizzeiten', () => {
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+  // die Einheit steht im Schlüssel (setupExtent in m, setupExtentKm in km), nie als Literal im Code
+  assert.doesNotMatch(code, /'\s*k?m'/, 'feste Einheit „ m“/„ km“ in app.js');
+  assert.match(funktion(code, 'extentLine'), /fmt\.t\('setupExtentKm'/);
+  assert.match(funktion(code, 'extentLine'), /fmt\.t\('setupExtent'/);
+  assert.match(de.setupExtent, / m$/);
+  assert.match(de.setupExtentKm, / km$/);
+  // Wechsel der Heizart setzt die Aufheizzeiten der Tabelle; dieselbe Heizart lässt eigene stehen (Abschnitt 7)
+  assert.match(funktion(code, 'applyHeatType'), /if \(type !== place\.heat\.type\) \{[^}]*leadMin = p\.leadMin;[^}]*\}\s*place\.heat\.confirmed = confirmed;/);
+});
+
 test('CSS: Wettersymbol-Variablen, Ampelfarbe in --lv, Tage ab 720 px dreispaltig', () => {
   for (const v of ['--ic-sun', '--ic-moon', '--ic-cloud', '--ic-cloud-dark', '--ic-fog', '--ic-rain', '--ic-snow', '--ic-bolt']) {
     assert.match(css, new RegExp(v + ':\\s*oklch\\('), v + ' fehlt in :root');
   }
   assert.match(css, /clamp\(3rem, 14vw, 5rem\)/, 'große Temperatur: clamp(3rem, 14vw, 5rem)');
-  assert.match(css, /var\(--lv, var\(--ok\)\)/);
+  // Ohne Stufe fehlt --lv: dann bleibt die Ampel neutral (--line), nie grün getönt, als wäre alles ruhig
+  assert.match(css, /\.verdict\s*\{[^}]*border-left: 6px solid var\(--lv, var\(--line\)\);[^}]*background: color-mix\(in oklch, var\(--lv, var\(--line\)\) 9%, var\(--bg\)\);/);
+  assert.doesNotMatch(css, /var\(--lv, var\(--ok\)\)/);
   assert.match(css, /@media \(min-width: 720px\)\s*\{\s*\.days\s*\{\s*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
 });
 

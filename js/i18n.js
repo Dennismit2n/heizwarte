@@ -79,8 +79,10 @@
       setupConfirmYes: 'Ja, das stimmt',
       setupConfirmNo: 'Nein, zurück',
       setupRegion: 'Das liegt in: {region}.',
-      // {w} ist die Zahl, {h} die Zahl mit Einheit, damit „22 × 28 m“ bei einem Haus und „2,1 × 1,4 km“ bei einem Ortsteil entsteht
-      setupExtent: 'Umriss etwa {w} × {h}',
+      // {w} und {h} sind nur Zahlen, die Einheit steht im Text: setupExtent in Metern („22 × 28 m“ bei einem Haus),
+      // setupExtentKm in Kilometern („2,1 × 1,4 km“ bei einem Ortsteil; nur wenn beide Maße mindestens 1 km sind)
+      setupExtent: 'Umriss etwa {w} × {h} m',
+      setupExtentKm: 'Umriss etwa {w} × {h} km',
       setupCoords: '{lat} / {lon} · auf etwa 100 m gerundet',
       setupElev: 'Höhe: {m} m',
       setupElevAuto: 'automatisch ermittelt',
@@ -140,9 +142,10 @@
       levelTitle2: 'Heizung {when} deutlich hochdrehen.',
       levelTitle3: 'Heizung {when} durchlaufen lassen.',
       levelText0: 'Keine großen Temperatursprünge in Sicht. Deine Wohnung bleibt warm, ohne früher zu heizen.',
-      levelText1: 'Abkühlung setzt gegen {onset} ein. Bei {lead} Stunden Aufheizzeit musst du vorher starten.',
-      levelText2: 'Abkühlung setzt gegen {onset} ein. Bei {lead} Stunden Aufheizzeit musst du vorher starten.',
-      levelText3: 'Abkühlung setzt gegen {onset} ein. Bei {lead} Stunden Aufheizzeit musst du vorher starten.',
+      // {lead} mit „h“ wie in planLead: „Stunden“ hieße bei einer Aufheizzeit von 1 „Bei 1 Stunden“
+      levelText1: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
+      levelText2: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
+      levelText3: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
       levelNoData: 'Keine Empfehlung möglich – es fehlen aktuelle Wetterdaten.',
       reasonNightMin: 'Die Nacht wird kalt: bis {t}.',
       // {k} ist der Betrag ohne Vorzeichen
