@@ -1,0 +1,4 @@
+{
+  "error": true,
+  "reason": "Cannot initialize ForecastVariable from invalid String value foo."
+}

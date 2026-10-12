@@ -32,10 +32,18 @@
  *                       12.10.2026 liegt (BAUPLAN: now = 14.10.2026 08:00)
  *   alerts-sturm.json   die Warnung SCHWERE STURMBÖEN (severity moderate) aus alerts-dwd-2026-10-10.json, mit
  *                       dem location-Block aus alerts-leer.json, in der Form der Bright-Sky-Antwort
+ *   om-wien.json        Europe/Vienna (UTC+1 im Januar), 48,21 / 16,37, 171 m, Nächte um 0 bis 2 °C
+ *   om-error.json       Fehlerantwort von Open-Meteo, Form aus KT §5.1: {"error":true,"reason":"…"} (im Test mit
+ *                       Status 400 ausgeliefert)
+ *   bs-fern.json        bs-buerg.json mit sources[0].distance = 40000 (weiter weg als die 25-km-Grenze)
+ *   bs-404-nosource.json  Bright-Sky-Fehlerantwort aus KT §6.1 (Status 404, keine Station in Reichweite)
+ *   alerts-404-outside.json  Bright-Sky-Fehlerantwort aus KT §6.2 (Status 404, Position nicht vom DWD abgedeckt)
  *
  * Nicht von diesem Skript, sondern von Hand kopiert aus _intern/plan/ (Mitschnitte vom 10./11.10.2026):
  *   alerts-dwd-2026-10-10.json  = bs_alerts_all.json (17 echte Warnungen, 7 × expires null, 7 × instruction_de null)
  *   alerts-leer.json            = bs_alerts.json (Bürg, alerts [] mit location)
+ *   bs-buerg.json               = bs_buerg.json (Station BACKNANG, 7692 m, 291 m, ein Stundenwert)
+ *   bs-wien.json                = bs_wien.json (Station WIEN/CITY, 955 m, 171 m, ein Stundenwert)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -278,6 +286,16 @@ speichere('om-lissabon.json', baue({
   sun: [6, 6, 5, 6, 6], code: [1, 1, 2, 1, 1], wind: 12, gust: 24
 }));
 
+// Wien: Europe/Vienna, im Januar UTC+1, also beginnt Tag 0 um 23:00 UTC des Vortags (wie Berlin)
+speichere('om-wien.json', baue({
+  tz: 'Europe/Vienna', abk: 'GMT+1', offset: 3600, lat: 48.21, lon: 16.37, elev: 171,
+  start: Date.UTC(2026, 0, 12) / 1000 - 3600,
+  lens: [24, 24, 24, 24, 24],
+  rise: 7.6, set: 16.4,
+  tr: [1, 1, 0, 2, 1, 0], pk: [4, 4, 3, 5, 4],
+  sun: [2, 2, 1, 3, 2], code: [3, 3, 3, 1, 3], wind: 10, gust: 22
+}));
+
 // Umstellungswochenende: 24.10. (24 h), 25.10. (25 h), 26.–28.10. (je 24 h); Ortsmitternacht des 24.10.
 // in der Sommerzeit = 23.10. 22:00 UTC
 speichere('om-dst.json', baue({
@@ -318,3 +336,17 @@ const leer = JSON.parse(fs.readFileSync(path.join(HIER, 'alerts-leer.json'), 'ut
 const sturm = dwd.alerts.find((a) => a.event_de === 'SCHWERE STURMBÖEN');
 if (!sturm) { throw new Error('SCHWERE STURMBÖEN fehlt in alerts-dwd-2026-10-10.json'); }
 speichere('alerts-sturm.json', { alerts: [sturm], location: leer.location });
+
+// Fehlerantworten der Dienste (Form aus KT §5.1, §6.1, §6.2; der Test liefert sie mit Status 400 bzw. 404 aus)
+speichere('om-error.json', {
+  error: true,
+  reason: 'Cannot initialize ForecastVariable from invalid String value foo.'
+});
+speichere('bs-404-nosource.json', { detail: 'No sources match your criteria' });
+speichere('alerts-404-outside.json', { detail: 'Requested position is not covered by the DWD' });
+
+// Station außerhalb der 25-km-Grenze: derselbe Mitschnitt, nur weiter weg
+const bs = JSON.parse(fs.readFileSync(path.join(HIER, 'bs-buerg.json'), 'utf8'));
+bs.sources[0].distance = 40000;
+fs.writeFileSync(path.join(HIER, 'bs-fern.json'), JSON.stringify(bs) + '\n', 'utf8');
+console.log('geschrieben: bs-fern.json');
