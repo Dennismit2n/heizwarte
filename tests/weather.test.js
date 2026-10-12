@@ -141,6 +141,29 @@ test('weather.js: kein Zugriff auf Gerätezeit, DOM oder Speicher im Code', () =
   assert.ok(!/new Date\(\s*\)/.test(quelle), 'new Date() ohne Argument liest die Gerätezeit');
 });
 
+test('weather.js: Date nur als Date.parse (Bright-Sky-Stempel) und Date.now (Standardwert), Abschnitt 3', () => {
+  const quelle = fs.readFileSync(path.join(__dirname, '..', 'js', 'weather.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  const funde = quelle.match(/\bDate\b(\.\w+)?/g) || [];
+  assert.ok(funde.length > 0);
+  for (const f of funde) { assert.ok(['Date.parse', 'Date.now'].indexOf(f) >= 0, f + ' kommt im Code vor'); }
+});
+
+test('bsUrls: die Kalenderrechnung ohne Date stimmt Tag für Tag, auch 2000 (Schaltjahr) und 2100 (keins)', () => {
+  const tag = 86400000;
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  for (const [von, bis] of [[Date.UTC(1999, 11, 1), Date.UTC(2001, 2, 31)], [Date.UTC(2023, 11, 1), Date.UTC(2025, 2, 31)],
+    [Date.UTC(2099, 11, 1), Date.UTC(2100, 2, 31)]]) {
+    for (let t = von + 12 * 3600000; t <= bis; t += tag) {
+      const q = new URL(weather.bsUrls(BUERG, 'UTC', t).mos).searchParams;
+      assert.equal(q.get('date'), iso(t - tag), 'date zu ' + iso(t));
+      assert.equal(q.get('last_date'), iso(t + 4 * tag), 'last_date zu ' + iso(t));
+    }
+  }
+  assert.equal(new URL(weather.bsUrls(BUERG, 'UTC', Date.UTC(2100, 1, 27, 12)).mos).searchParams.get('last_date'), '2100-03-03');
+});
+
 // ---------------------------------------------------------------------------------------------
 // Adressen
 // ---------------------------------------------------------------------------------------------
@@ -513,6 +536,24 @@ test('load: fetched ist ohne nowMs die aktuelle Uhrzeit', async () => {
   assert.ok(cache.fetched >= vor && cache.fetched <= Date.now());
 });
 
+test('load: fetched ist der Zeitpunkt der erfolgreichen Antwort, nicht der Start von load() (429 und 60 s)', async () => {
+  // eine Uhr, die beim Warten weiterläuft
+  let uhr = BUERG_NOW_MS;
+  const sleep = async (ms) => { uhr += ms; };
+  const f = dienste({ '/v1/forecast': folge('429-dann-200') });
+  const { cache } = await weather.load(BUERG, { fetchImpl: f, sleep, now: () => uhr });
+  assert.equal(cache.fetched, BUERG_NOW_MS + 60000);
+
+  // ohne Warten: Start und Antwort fallen zusammen; now hat Vorrang vor nowMs
+  uhr = BUERG_NOW_MS;
+  const ohne = await weather.load(BUERG, { fetchImpl: dienste(), sleep, now: () => uhr, nowMs: 1 });
+  assert.equal(ohne.cache.fetched, BUERG_NOW_MS);
+  // eine Uhr, die Unsinn liefert, fällt auf die Gerätezeit zurück
+  const vor = Date.now();
+  const kaputt = await weather.load(BUERG, { fetchImpl: dienste(), now: () => 'bald' });
+  assert.ok(kaputt.cache.fetched >= vor && kaputt.cache.fetched <= Date.now());
+});
+
 test('load: Eingabeort bleibt unverändert, und der Cache enthält weder Ortsnamen noch Adresse', async () => {
   const ort = { id: 'a1b2c3d4', label: 'Mama (Marktstraße 1)', lat: 48.881, lon: 9.441, elev: 414, elevAuto: false,
     cc: 'DE', tz: null, created: 1, heat: { type: 'radiator' } };
@@ -613,6 +654,29 @@ test('load: keine Station in Reichweite (404) ist mos leer ohne Problem', async 
   assert.equal(cache.mosStation, null);
   assert.deepEqual(problems, []);
   assert.equal(cache.alertsStatus, 'none', 'die Warnungen kommen trotzdem');
+});
+
+test('load: eine 404 ohne den erwarteten Text ist ein Fehler, nicht „keine Station“ oder „außerhalb“', async () => {
+  for (const antwort of [{ status: 404 }, { status: 404, body: { detail: 'Not Found' } }, { status: 404, body: '<html>404</html>' },
+    { status: 404, body: { detail: null } }]) {
+    const w = await weather.load(BUERG, { fetchImpl: dienste({ '/weather?': antwort }), nowMs: BUERG_NOW_MS });
+    assert.deepEqual(w.problems, ['mosFailed'], 'weather ' + JSON.stringify(antwort));
+    assert.deepEqual(w.cache.mos, []);
+    assert.equal(w.cache.mosStation, null);
+
+    const a = await weather.load(BUERG, { fetchImpl: dienste({ '/alerts?': antwort }), nowMs: BUERG_NOW_MS });
+    assert.equal(a.cache.alertsStatus, 'error', 'alerts ' + JSON.stringify(antwort));
+    assert.equal(a.cache.alerts, null);
+    assert.deepEqual(a.problems, ['alertsFailed']);
+  }
+  // die beiden echten Körper (KT §6.1, §6.2) bleiben „keine Station“ bzw. „außerhalb“, auch in anderer Schreibung
+  const keine = await weather.load(BUERG, {
+    fetchImpl: dienste({ '/weather?': { status: 404, body: { detail: 'no sources match your criteria' } } }), nowMs: BUERG_NOW_MS });
+  assert.deepEqual(keine.problems, []);
+  const aussen = await weather.load(BUERG, {
+    fetchImpl: dienste({ '/alerts?': { status: 404, body: fixture('alerts-404-outside.json') } }), nowMs: BUERG_NOW_MS });
+  assert.equal(aussen.cache.alertsStatus, 'outside');
+  assert.deepEqual(aussen.problems, []);
 });
 
 test('load: ein gescheiterter MOSMIX-Abruf ist mos leer mit Problem mosFailed, nie alte Werte', async () => {
@@ -909,11 +973,13 @@ test('Modell om-buerg-2026-10-09: 120 Stunden, 5 Tage, Tageswerte über daily zu
   assert.equal(m.gaps, 0);
   assert.deepEqual(m.days.map((d) => d.key), ['2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12']);
   assert.deepEqual(m.days.map((d) => d.idx), [0, 1, 2, 3, 4]);
-  assert.deepEqual(Object.keys(m).sort(), ['current', 'days', 'fetched', 'gaps', 'hours', 'mosStation', 'tz']);
+  assert.deepEqual(Object.keys(m).sort(), ['alerts', 'current', 'days', 'fetched', 'gaps', 'hours', 'mosStation', 'tz']);
   assert.deepEqual(Object.keys(m.hours[0]).sort(),
     ['app', 'cc', 'code', 'dayIdx', 'dew', 'gust', 'h', 'isDay', 'mos', 'ms', 'pp', 'pr', 'rh', 'sw', 'temp', 'wind']);
   assert.deepEqual(Object.keys(m.days[0]).sort(),
-    ['code', 'gt', 'gust', 'idx', 'key', 'max', 'mean', 'min', 'rain', 'sun', 'sunriseMs', 'sunsetMs']);
+    ['code', 'gt', 'gust', 'idx', 'key', 'max', 'mean', 'min', 'partial', 'rain', 'sun', 'sunriseMs', 'sunsetMs']);
+  assert.ok(m.days.every((d) => d.partial === false), 'fünf ganze Tage');
+  assert.equal(m.alerts, null, 'der Cache hat keine Warnungen');
 
   // erste Stunde: 08.10.2026 00:00 in Berlin = 07.10. 22:00 UTC
   assert.equal(m.hours[0].ms, Date.UTC(2026, 9, 7, 22, 0));
@@ -1175,6 +1241,44 @@ test('localNow und dayKeyOf: Etc/GMT-2 wie Berlin im Sommer, halbe Stunden in In
   assert.equal(weather.dayKeyOf(t, 'Pacific/Auckland'), '2026-01-14');
   assert.equal(weather.dayKeyOf(t, 'Pacific/Honolulu'), '2026-01-13');
   assert.equal(weather.dayKeyOf(t, 'UTC'), '2026-01-13');
+});
+
+test('localNow und dayKeyOf: tz null, undefined oder unbekannt rechnen in UTC, unter jeder Prozess-Zeitzone gleich', () => {
+  // Place.tz ist null bis zur ersten Open-Meteo-Antwort; das darf weder werfen noch die Gerätezone nehmen
+  const t = Date.UTC(2026, 9, 11, 23, 30);
+  const soll = { key: '2026-10-11', h: 23, min: 30, ms: t };
+  const alt = process.env.TZ;
+  try {
+    for (const zone of ['Pacific/Auckland', 'America/New_York', 'Asia/Kolkata', 'Europe/Berlin', 'UTC']) {
+      process.env.TZ = zone;
+      for (const tz of [null, undefined, '', 'Mars/Olympus', 42]) {
+        assert.deepEqual(weather.localNow(tz, t), soll, zone + ' / ' + String(tz));
+        assert.equal(weather.dayKeyOf(t, tz), '2026-10-11', zone + ' / ' + String(tz));
+      }
+    }
+  } finally {
+    if (alt === undefined) { delete process.env.TZ; } else { process.env.TZ = alt; }
+  }
+});
+
+test('Modell: Warnungen aus dem Cache bekommen expiresMs, die Felder bleiben wörtlich', () => {
+  const alle = fixture('alerts-dwd-2026-10-10.json').alerts;
+  const vorher = JSON.stringify(alle);
+  const m = modelOf('om-buerg-2026-10-09.json', { alerts: alle });
+  assert.equal(JSON.stringify(alle), vorher, 'der Cache bleibt unverändert');
+  assert.equal(m.alerts.length, 17);
+  m.alerts.forEach((a, i) => {
+    for (const k of ALERT_FIELDS) { assert.equal(a[k], alle[i][k], k); }
+    assert.equal(a.expiresMs, alle[i].expires === null ? null : Date.parse(alle[i].expires));
+  });
+  assert.equal(m.alerts[0].expiresMs, Date.UTC(2026, 9, 11, 9, 0));
+  assert.equal(m.alerts.filter((a) => a.expiresMs === null).length, 7);
+
+  // unlesbarer Stempel gilt wie null; Nicht-Objekte fallen weg; ohne Warnungen null, leere Liste bleibt leer
+  const odd = modelOf('om-mild.json', { alerts: [{ event_de: 'STURM', expires: 'bald' }, null, 3, { event_de: 'FROST' }] });
+  assert.deepEqual(odd.alerts.map((a) => [a.event_de, a.expiresMs]), [['STURM', null], ['FROST', null]]);
+  assert.equal(modelOf('om-mild.json').alerts, null);
+  assert.deepEqual(modelOf('om-mild.json', { alerts: [] }).alerts, []);
 });
 
 test('Modell: leere oder kaputte Antwort wirft nicht und liefert ein leeres Modell', () => {

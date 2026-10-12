@@ -398,17 +398,38 @@ test('fmt.date und fmt.wday: Datum und Wochentag in Ortszeit', () => {
   assert.match(fmt.date(JETZT, 'Pacific/Auckland', 'de'), /^14\. ?Jan/);
 });
 
-test('fmt.rel: Einheit automatisch, vor, in, jetzt, gestern', () => {
+test('fmt.rel: Einheit automatisch, vor, in, jetzt; unter 48 Stunden Stunden, danach Tage ohne Kalenderwort', () => {
   assert.equal(fmt.rel(JETZT - 3 * 3600e3, JETZT, 'de'), 'vor 3 Stunden');
   assert.equal(fmt.rel(JETZT - 5 * 60e3, JETZT, 'de'), 'vor 5 Minuten');
   assert.equal(fmt.rel(JETZT - 20e3, JETZT, 'de'), 'jetzt');
   assert.equal(fmt.rel(JETZT, JETZT, 'de'), 'jetzt');
   assert.equal(fmt.rel(JETZT - 59.7 * 60e3, JETZT, 'de'), 'vor 1 Stunde', '60 Minuten werden zur Stunde');
-  assert.equal(fmt.rel(JETZT - 23.6 * 3600e3, JETZT, 'de'), 'gestern', '24 Stunden werden zum Tag');
-  assert.equal(fmt.rel(JETZT - 36 * 3600e3, JETZT, 'de'), 'gestern');
+  assert.equal(fmt.rel(JETZT - 23.6 * 3600e3, JETZT, 'de'), 'vor 24 Stunden', 'kein „gestern“ für reine Stundenzählung');
+  assert.equal(fmt.rel(JETZT - 36 * 3600e3, JETZT, 'de'), 'vor 36 Stunden');
+  assert.equal(fmt.rel(JETZT - 47.4 * 3600e3, JETZT, 'de'), 'vor 47 Stunden');
+  assert.equal(fmt.rel(JETZT - 47.6 * 3600e3, JETZT, 'de'), 'vor 2 Tagen', 'ab 48 Stunden ganze Tage, nie „vorgestern“');
   assert.equal(fmt.rel(JETZT - 3 * 86400e3, JETZT, 'de'), 'vor 3 Tagen');
   assert.equal(fmt.rel(JETZT + 2 * 3600e3, JETZT, 'de'), 'in 2 Stunden');
+  assert.equal(fmt.rel(JETZT + 3 * 86400e3, JETZT, 'de'), 'in 3 Tagen');
   assert.equal(fmt.rel(JETZT - 3 * 3600e3, JETZT, 'en'), '3 hours ago');
+  assert.equal(fmt.rel(JETZT - 2 * 86400e3, JETZT, 'en'), '2 days ago');
+});
+
+test('fmt.rel und fmt.when im Stempel widersprechen sich nicht (Review Runde 1)', () => {
+  // jetzt 23:40, Abruf 00:05 desselben Tages: „heute 0:05 (vor 24 Stunden)“, nicht „(gestern)“
+  const spaet = bei(13, 23, 40);
+  const frueh = bei(13, 0, 5);
+  assert.equal(fmt.when(frueh, spaet, BERLIN, 'de'), 'heute 0:05');
+  assert.equal(fmt.rel(frueh, spaet, 'de'), 'vor 24 Stunden');
+  // 26 Stunden über zwei Kalendertage: Abruf Montag 23:00, jetzt Mittwoch 1:00
+  const mo = bei(12, 23, 0);
+  const mi = bei(14, 1, 0);
+  assert.equal(mi - mo, 26 * 3600e3);
+  assert.equal(fmt.when(mo, mi, BERLIN, 'de'), 'Montag 23:00');
+  assert.equal(fmt.rel(mo, mi, 'de'), 'vor 26 Stunden');
+  for (const l of ['de', 'en', 'fr', 'ja']) {
+    assert.ok(/\d/.test(fmt.rel(mo, mi, l)), l + ': eine Zahl statt eines Kalenderworts');
+  }
 });
 
 test('fmt.when: heute, morgen, gestern, sonst Wochentag, je nach Ortsdatum', () => {

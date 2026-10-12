@@ -58,8 +58,12 @@
 
   // Warnungen: DWD-Namen (event_de, index:345) und die englischen Namen (event_en, Annahme für die Liste,
   // B:52 nennt beide Felder). Die Schwere wird getrennt geprüft (index:346).
+  // Englisch verlangt bei storm einen Wortanfang und bei ice ein ganzes Wort: Sonst trifft „thunderstorm“
+  // (GEWITTER, STARKES GEWITTER) über „storm“, und jede Gewitterwarnung höbe die Ampel auf Heiz-Alarm.
+  // Bürg schlug bei Gewitter nur an, wenn der deutsche Name ORKAN oder STURM trug; das bleibt so, weil die
+  // deutsche Liste unverändert ist. „storm-force gusts“, „near gale“ und „black ice“ treffen weiter.
   const ALERT_RX_DE = /frost|sturm|orkan|glätte|glatteis|kälte|schnee|wind/i;
-  const ALERT_RX_EN = /frost|storm|gale|ice|cold|snow|wind/i;
+  const ALERT_RX_EN = /frost|\bstorm|gale|\bice\b|cold|snow|wind/i;
   const SEVERE_RX = /severe|extreme/;
 
   // Stufe der Heizung (strength) und Ladestand beim Nachtspeicher (charge) teilen sich dieselben Schwellen
@@ -213,6 +217,15 @@
     return { level: hits.length ? (severe ? 3 : 2) : 0, hits };
   }
 
+  // Nur Warnungen, die zum Zeitpunkt nowMs noch gelten. weather.model() gibt jeder Warnung expiresMs mit
+  // (null = ohne Ende); abgelaufen ist sie ab expiresMs <= nowMs. Eine Warnung ohne expiresMs (roh aus dem
+  // Cache) bleibt stehen, weil heat.js keine Zeitstempel lesen darf. Grund: Ein alter Cache (ohne Netz)
+  // hielte die Ampel sonst mit längst abgelaufenen Sturmwarnungen oben.
+  function activeAlerts(alerts, nowMs) {
+    if (!Array.isArray(alerts)) { return []; }
+    return alerts.filter((a) => !(a && typeof a === 'object' && isNum(a.expiresMs) && isNum(nowMs) && a.expiresMs <= nowMs));
+  }
+
   // ---------------------------------------------------------------------------------------------
   // Fahrplan
   // ---------------------------------------------------------------------------------------------
@@ -330,20 +343,23 @@
     // kleinster Tiefstwert der ersten zwei Nächte
     const first2 = nights.slice(0, 2);
     const minN = Math.min.apply(null, first2.map((n) => n.min));
-    // fehlende Tage zählen als 0
+    // fehlende Tage zählen als 0, Rumpftage (partial, weather.model) ebenso: Ein Tag aus einer einzigen
+    // Stunde nach der Frühjahrsumstellung hat kein Tagesmittel. Nicht über mean = null lösen, denn
+    // null − Zahl rechnet in JavaScript mit 0.
+    const whole = (d) => !!d && !d.partial;
     const drop48 = Math.min(
-      D[1] ? D[1].mean - D[0].mean : 0,
-      D[2] ? D[2].mean - D[0].mean : 0
+      whole(D[0]) && whole(D[1]) ? D[1].mean - D[0].mean : 0,
+      whole(D[0]) && whole(D[2]) ? D[2].mean - D[0].mean : 0
     );
     const gtRise = Math.max(
-      D[1] ? D[1].gt - D[0].gt : 0,
-      D[2] ? D[2].gt - D[1].gt : 0
+      whole(D[0]) && whole(D[1]) ? D[1].gt - D[0].gt : 0,
+      whole(D[1]) && whole(D[2]) ? D[2].gt - D[1].gt : 0
     );
     // coldMin und coldSun sind nicht einstellbar und kommen deshalb aus THRESH
     const coldWindy = first2.some((n) => n.min < THRESH.coldMin && n.wind > T.coldWind) &&
       D.slice(0, 2).some((d) => isNum(d.sun) && d.sun < THRESH.coldSun);
 
-    const am = alertMatches(alerts);
+    const am = alertMatches(activeAlerts(alerts, now.ms));
 
     let level = 0;
     const reasons = [];
@@ -419,6 +435,7 @@
     night,
     lead,
     alertMatches,
+    activeAlerts,
     assess,
     plan,
     isDue,

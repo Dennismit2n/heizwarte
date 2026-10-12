@@ -18,6 +18,11 @@
   // Ein Tag der Antwort beginnt in Open-Meteo bei Mitternacht mit festem Offset; zwölf Stunden dazu liegen in
   // jedem Fall am richtigen Ortstag, auch am Umstellungstag (BAUPLAN Abschnitt 5, weather)
   const HALF_DAY_MS = 43200000;
+  // Ein Tag mit weniger Stundenwerten gilt als Rumpftag (partial). Open-Meteo hält den Offset über die ganze
+  // Antwort fest (KT §5.1); liegt die Frühjahrsumstellung im Fenster, endet die Antwort mit einem Ortstag aus
+  // einer einzigen Stunde (Mitternacht). Sein Mittel ist kein Tagesmittel; heat.assess() lässt ihn aus drop48
+  // und gtRise heraus. 23 Stunden (Umstellungstag selbst) und einzelne Lücken bleiben ganze Tage.
+  const MIN_DAY_HOURS = 20;
 
   // ---------------------------------------------------------------------------------------------
   // Ortszeit
@@ -63,9 +68,11 @@
     return 'UTC';
   }
 
+  // Die Zone läuft über tzSafe: null, undefined (Place.tz vor der ersten Antwort) oder ein unbekannter Name
+  // rechnen in UTC, statt zu werfen oder still die Gerätezone zu nehmen. Auf jedem Gerät dasselbe Ergebnis.
   function localParts(ms, tz) {
     const p = {};
-    for (const x of zoneFormat(tz).formatToParts(ms)) { p[x.type] = x.value; }
+    for (const x of zoneFormat(tzSafe(tz)).formatToParts(ms)) { p[x.type] = x.value; }
     // % 24: ältere Laufzeiten melden Mitternacht als 24 (Bürg index:243)
     return { key: p.year + '-' + p.month + '-' + p.day, h: Number(p.hour) % 24, min: Number(p.minute) };
   }
@@ -99,8 +106,11 @@
   //   hours  eine Stunde je Zeitpunkt mit ms, dayIdx und h aus der Ortszeit (Intl, nicht getHours());
   //          Stunden ohne Temperatur fallen weg und zählen in gaps
   //   days   aus den Stunden gruppiert; mean ist das Mittel aller Stunden des Tages, gt die Gradtagzahl;
-  //          die Tageswerte aus daily werden dem Tag über dayKeyOf(time + 12 h) zugeordnet
+  //          die Tageswerte aus daily werden dem Tag über dayKeyOf(time + 12 h) zugeordnet; partial: true
+  //          bei weniger als MIN_DAY_HOURS Stunden (Rumpftag nach der Frühjahrsumstellung)
   //   mos    MOSMIX-Temperatur der Stunde, Verbindung über ms exakt
+  //   alerts die Warnungen aus dem Cache, unverändert plus expiresMs (null ohne Ende); null, wenn der Cache
+  //          keine hat. app.js gibt heat.assess() diese Liste, damit abgelaufene Warnungen nicht mehr zählen.
   function model(cache) {
     const heat = root.Heizwarte.heat;
     const om = (cache && cache.om) || {};
@@ -158,7 +168,8 @@
         mean,
         sun: null, code: null, rain: null, gust: null,
         gt: heat.degreeDay(mean),
-        sunriseMs: null, sunsetMs: null
+        sunriseMs: null, sunsetMs: null,
+        partial: sums[idx].n < MIN_DAY_HOURS
       };
     });
 
@@ -200,8 +211,23 @@
       hours,
       days,
       mosStation: (cache && cache.mosStation) || null,
-      gaps
+      gaps,
+      alerts: modelAlerts(cache && cache.alerts)
     };
+  }
+
+  // Warnungen mit Ablaufzeit: Bright Sky stempelt mit Offset (+00:00), deshalb ist Date.parse hier erlaubt
+  // (BAUPLAN Abschnitt 3). expires null oder unlesbar → expiresMs null, die Warnung gilt bis auf Weiteres.
+  // Die Felder selbst bleiben wörtlich (KT §6.3); es kommt nur expiresMs dazu, auf einer Kopie.
+  function modelAlerts(list) {
+    if (!Array.isArray(list)) { return null; }
+    const out = [];
+    for (const a of list) {
+      if (!a || typeof a !== 'object') { continue; }
+      const exp = typeof a.expires === 'string' ? Date.parse(a.expires) : NaN;
+      out.push(Object.assign({}, a, { expiresMs: isFinite(exp) ? exp : null }));
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -233,10 +259,41 @@
     return String(Math.round(x * 1000) / 1000);
   }
 
-  // 'YYYY-MM-DD' plus n Tage, reine UTC-Rechnung ohne Gerätezeitzone
+  // Tage seit 1970-01-01 für ein Kalenderdatum und zurück (days_from_civil und civil_from_days von Howard
+  // Hinnant, wie i18n.js). Reine Ganzzahlrechnung ohne Date: weather.js darf Date nur für Date.parse auf
+  // Bright-Sky-Stempeln benutzen (BAUPLAN Abschnitt 3).
+  function daysFromCivil(y, m, d) {
+    const yy = m <= 2 ? y - 1 : y;
+    const era = Math.floor(yy / 400);
+    const yoe = yy - era * 400;
+    const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+    const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+    return era * 146097 + doe - 719468;
+  }
+
+  function civilFromDays(n) {
+    const z = n + 719468;
+    const era = Math.floor(z / 146097);
+    const doe = z - era * 146097;
+    const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+    const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+    const mp = Math.floor((5 * doy + 2) / 153);
+    const d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+    const m = mp < 10 ? mp + 3 : mp - 9;
+    return { y: yoe + era * 400 + (m <= 2 ? 1 : 0), m, d };
+  }
+
+  function pad(x, len) {
+    let s = String(x);
+    while (s.length < len) { s = '0' + s; }
+    return s;
+  }
+
+  // 'YYYY-MM-DD' plus n Tage, in reinen Kalendertagen (Monats-, Jahres- und Schaltjahrwechsel inklusive)
   function addDays(key, n) {
     const p = key.split('-');
-    return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]) + n)).toISOString().slice(0, 10);
+    const c = civilFromDays(daysFromCivil(Number(p[0]), Number(p[1]), Number(p[2])) + n);
+    return pad(c.y, 4) + '-' + pad(c.m, 2) + '-' + pad(c.d, 2);
   }
 
   // Zonennamen bleiben lesbar (Europe/Berlin), aber ein '+' ('Etc/GMT+5') würde in einer Query als Leerzeichen gelesen
@@ -337,7 +394,11 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // Retry-After in Millisekunden, wenn der Kopf lesbar ist (ganze Sekunden, wie update.py mit isdigit()); sonst null
+  // Retry-After in Millisekunden, wenn der Kopf lesbar ist (ganze Sekunden, wie update.py mit isdigit()); sonst null.
+  // Nur außerhalb des Browsers wirksam (Node, Tests): Retry-After ist kein CORS-freigegebener Antwortkopf, und
+  // Open-Meteo gibt ihn (Annahme, nicht live geprüft) nicht per Access-Control-Expose-Headers frei; im Browser
+  // liefert headers.get() dann null, und es bleibt bei 60 s. Der 120-s-Deckel greift dort also nie
+  // (BAUPLAN Abschnitt 16, Schritt „Review Runde 1“).
   function readRetryAfter(res) {
     try {
       const raw = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;
@@ -448,13 +509,17 @@
   // Problemen zurück: 'tzUnknown' (Zone der Antwort unbekannt, fester Offset als Ersatz), 'mosFailed',
   // 'alertsFailed'. Es gibt keinen alten Cache als Eingabe; was nicht ankommt, ist leer (mos [], alerts null).
   //   alertsStatus  'ok' (Warnungen da), 'none' (Abfrage ohne Warnung), 'outside' (kein DWD-Gebiet: Ort nicht
-  //                 in Deutschland, nicht abgefragt oder 404), 'error' (Abfrage gescheitert)
+  //                 in Deutschland, nicht abgefragt oder 404 „not covered“), 'error' (Abfrage gescheitert)
   // Open-Meteo wird bei HTTP 429 einmal nach 60 s wiederholt (fetchWithRetry); ein zweiter 429 wirft
   // OpenMeteoError('rate'). Bright Sky wird nie wiederholt.
-  // opts: { fetchImpl, sleep, nowMs, timeoutMs, onWait, onWaiting }
+  // fetched ist der Zeitpunkt der erfolgreichen Open-Meteo-Antwort, nicht der Start von load(): Nach einem 429
+  // liegen 60 s dazwischen. Die Uhr ist o.now() (eine Funktion, für Tests, in denen die Zeit beim Warten
+  // weiterläuft), sonst der feste Wert o.nowMs, sonst Date.now(); gelesen wird sie erst nach dem Abruf.
+  // opts: { fetchImpl, sleep, now, nowMs, timeoutMs, onWait, onWaiting }
   async function load(place, opts) {
     const o = opts || {};
-    const nowMs = typeof o.nowMs === 'number' && isFinite(o.nowMs) ? o.nowMs : Date.now();
+    const clock = typeof o.now === 'function' ? o.now
+      : () => (typeof o.nowMs === 'number' && isFinite(o.nowMs) ? o.nowMs : Date.now());
     const net = { fetchImpl: o.fetchImpl, timeoutMs: o.timeoutMs };
     if (!place || typeof place.lat !== 'number' || !isFinite(place.lat) ||
         typeof place.lon !== 'number' || !isFinite(place.lon)) {
@@ -467,12 +532,14 @@
     const failure = omFailure(r);
     if (failure) { throw failure; }
     const om = r.json;
+    const t = clock();
+    const fetchedMs = typeof t === 'number' && isFinite(t) ? t : Date.now();
 
     const problems = [];
     const tz = tzSafe(om.timezone, om.utc_offset_seconds);
     if (!zoneKnown(om.timezone)) { problems.push('tzUnknown'); }
 
-    const urls = bsUrls(place, tz, nowMs);
+    const urls = bsUrls(place, tz, fetchedMs);
     const [wr, ar] = await Promise.all([fetchJSON(urls.mos, net), urls.alerts ? fetchJSON(urls.alerts, net) : null]);
 
     let mos = [];
@@ -485,8 +552,10 @@
       } else {
         problems.push('mosFailed');
       }
-    } else if (wr.status !== 404) {
-      problems.push('mosFailed');           // 404 heißt „keine Station in Reichweite“, das ist kein Fehler
+    } else if (!(wr.status === 404 && detailSays(wr.json, /no sources/i))) {
+      // Nur die 404 mit „No sources match your criteria“ heißt „keine Station in Reichweite“ (KT §6.1) und ist
+      // kein Fehler; jede andere 404 (leerer Körper, Proxy, falscher Pfad) schon.
+      problems.push('mosFailed');
     }
 
     let alerts = null;
@@ -495,13 +564,18 @@
       if (ar.ok && ar.json && Array.isArray(ar.json.alerts)) {
         alerts = ar.json.alerts.map(cleanAlert).filter(Boolean);
         alertsStatus = alerts.length > 0 ? 'ok' : 'none';
-      } else if (ar.status !== 404) {
+      } else if (!(ar.status === 404 && detailSays(ar.json, /not covered/i))) {
         alertsStatus = 'error';
         problems.push('alertsFailed');
-      }                                      // 404 „not covered by the DWD“ bleibt 'outside'
+      }                                      // nur 404 „not covered by the DWD“ bleibt 'outside' (KT §6.2)
     }
 
-    return { cache: { v: CACHE_VERSION, fetched: nowMs, om, mos, mosStation, alerts, alertsStatus }, problems };
+    return { cache: { v: CACHE_VERSION, fetched: fetchedMs, om, mos, mosStation, alerts, alertsStatus }, problems };
+  }
+
+  // Sagt der Fehlerkörper von Bright Sky ({ "detail": "…" }) das Erwartete?
+  function detailSays(json, rx) {
+    return !!json && typeof json === 'object' && typeof json.detail === 'string' && rx.test(json.detail);
   }
 
   const api = {

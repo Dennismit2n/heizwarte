@@ -236,7 +236,7 @@
       threshWarnDrop48: 'Vorwarnung bei Veränderung des Tagesmittels in 48 Stunden',
       threshAlarmMinN: 'Heiz-Alarm, wenn die Nacht kälter wird als',
       threshAlarmDrop48: 'Heiz-Alarm bei Veränderung des Tagesmittels in 48 Stunden',
-      threshAlarmGtRise: 'Heiz-Alarm bei Anstieg der Gradtagzahl um',
+      threshAlarmGtRise: 'Heiz-Alarm, wenn der Heizbedarf von einem Tag zum nächsten steigt um',
       threshCritMinN: 'Frost-Stufe, wenn die Nacht kälter wird als',
       threshColdWind: 'Als windig gilt Wind ab',
       threshGustLead: 'Früher starten bei Böen ab',
@@ -456,9 +456,11 @@
     });
   }
 
-  function rtf(lang) {
-    return cached('rtf', lang, '', null, function () {
-      return new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
+  // numeric 'auto' für „jetzt“, „heute“, „morgen“, „gestern“; 'always' für reine Zählung („vor 2 Tagen“)
+  function rtf(lang, numeric) {
+    const n = numeric === 'always' ? 'always' : 'auto';
+    return cached('rtf', lang, '', n, function () {
+      return new Intl.RelativeTimeFormat(lang, { numeric: n });
     });
   }
 
@@ -540,33 +542,22 @@
     }
   }
 
-  // „vor 3 Stunden“, „vor 5 Minuten“, „gestern“: Einheit automatisch (Minute, Stunde, Tag), unter einer Minute „jetzt“
+  // „vor 3 Stunden“, „vor 5 Minuten“, „vor 2 Tagen“: Einheit automatisch (Minute, Stunde, Tag), unter einer
+  // Minute „jetzt“. Das ist reine Zählung ohne Kalender: Bis unter 48 Stunden bleibt es bei Stunden, danach
+  // ganze Tage mit numeric 'always'. Kalenderwörter („gestern“) widersprächen sonst fmt.when im selben Satz:
+  // „Stand: heute 0:05 (gestern)“ um 23:40, weil 23,6 Stunden zur Tageseinheit gerundet würden.
   function rel(ms, nowMs, lang) {
     if (!okTime(ms) || !okTime(nowMs)) { return DASH; }
     try {
       const diff = (ms - nowMs) / 1000;
       const abs = Math.abs(diff);
       const sign = diff < 0 ? -1 : 1;
-      let value;
-      let unit;
       const minutes = Math.round(abs / 60);
-      if (abs < 60) {
-        value = 0;
-        unit = 'second';
-      } else if (minutes < 60) {
-        value = sign * minutes;
-        unit = 'minute';
-      } else {
-        const hours = Math.round(abs / 3600);
-        if (hours < 24) {
-          value = sign * hours;
-          unit = 'hour';
-        } else {
-          value = sign * Math.max(1, Math.floor(abs / 86400));
-          unit = 'day';
-        }
-      }
-      return rtf(loc(lang)).format(value, unit);
+      const hours = Math.round(abs / 3600);
+      if (abs < 60) { return rtf(loc(lang)).format(0, 'second'); }
+      if (minutes < 60) { return rtf(loc(lang)).format(sign * minutes, 'minute'); }
+      if (hours < 48) { return rtf(loc(lang)).format(sign * hours, 'hour'); }
+      return rtf(loc(lang), 'always').format(sign * Math.max(2, Math.floor(abs / 86400)), 'day');
     } catch (e) {
       return DASH;
     }
