@@ -1,0 +1,6 @@
+_intern/
+node_modules/
+test-results/
+playwright-report/
+*.log
+Thumbs.db
