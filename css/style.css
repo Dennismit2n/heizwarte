@@ -782,3 +782,26 @@ select {
 .plan-meta {
   color: var(--muted);
 }
+
+/* ---------------------------------------------------------------------------------------------
+   Fußzeile (Abschnitt 8): zehn Absätze mit Quellen und Lizenzen, drei davon ganz als Link.
+   Der Link trägt Unterstreichung, nie Farbe allein; a.footer-link und .visually-hidden stehen oben.
+   --------------------------------------------------------------------------------------------- */
+
+footer {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+footer p + p {
+  margin-top: 0.75rem;
+}
+
+footer a.footer-link {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}

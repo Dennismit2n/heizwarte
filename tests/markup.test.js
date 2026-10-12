@@ -674,3 +674,69 @@ test('Statuszeile: CSS trägt „⚠ Veraltet“ in der Warnfarbe, Symbol und Wo
     assert.match(de[k], /^⚠ Veraltet – /, k);
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// Fußzeile (BAUPLAN Abschnitt 8): zehn Absätze, drei davon ganz als Link mit verstecktem „öffnet fremde Seite“
+// ---------------------------------------------------------------------------------------------
+
+const FOOTER_KEYS = ['footerWeather', 'footerDwd', 'footerAmpel', 'footerVdi', 'footerElev', 'footerGeo', 'footerFont', 'footerCode', 'footerPrivacy', 'footerOffline'];
+const FOOTER_LINKS = {
+  footerWeather: 'https://open-meteo.com/',
+  footerElev: 'https://doi.org/10.5270/ESA-c5d3d65',
+  footerCode: 'https://github.com/Dennismit2n/heizwarte'
+};
+
+function footerSlice() {
+  const start = html.indexOf('<footer');
+  const end = html.indexOf('</footer>');
+  assert.ok(start >= 0 && end > start, '<footer> fehlt');
+  return html.slice(start, end);
+}
+
+test('Fußzeile: genau ein footer hinter main, nicht versteckt, zehn Absätze in der Reihenfolge des Plans', () => {
+  assert.equal(all.filter((tg) => tg.name === 'footer').length, 1);
+  assert.ok(html.indexOf('</main>') < html.indexOf('<footer'), 'footer steht hinter main');
+  assert.equal(all.find((tg) => tg.name === 'footer').attrs.hidden, undefined, 'die Fußzeile ist nie versteckt');
+  const slice = footerSlice();
+  const absaetze = tags(slice).filter((tg) => tg.name === 'p');
+  assert.equal(absaetze.length, 10);
+  // Schlüssel in Reihenfolge: bei Zeilen ohne Link am p, bei Zeilen mit Link am ersten span im a
+  const schluessel = Array.from(slice.matchAll(/data-i18n="(footer[A-Za-z]+)"/g)).map((m) => m[1]).filter((k) => k !== 'footerExternal');
+  assert.deepEqual(schluessel, FOOTER_KEYS);
+  for (const k of FOOTER_KEYS.concat('footerExternal')) { assert.ok(has(de, k), k + ' fehlt in de'); }
+});
+
+test('Fußzeile: die drei Link-Zeilen sind wörtlich das Markup des Plans (Satz im a, versteckter Span im a, kein data-i18n am p)', () => {
+  const slice = footerSlice();
+  const zeilen = slice.match(/<p>[\s\S]*?<\/p>/g) || [];
+  assert.equal(zeilen.length, 3, 'drei p ohne data-i18n tragen einen Link');
+  assert.equal((slice.match(/<a\b/g) || []).length, 3, 'genau drei Links in der Fußzeile');
+  const erwartet = Object.keys(FOOTER_LINKS).map((k) =>
+    '<p><a class="footer-link" href="' + FOOTER_LINKS[k] + '" target="_blank" rel="noopener noreferrer">' +
+    '<span data-i18n="' + k + '"></span> <span class="visually-hidden" data-i18n="footerExternal"></span></a></p>');
+  assert.deepEqual(zeilen, erwartet);
+  // ein a in einem p mit data-i18n wäre nach dem ersten apply() weg
+  for (const tg of tags(slice).filter((x) => x.name === 'p' && x.attrs['data-i18n'] !== undefined)) {
+    const ab = slice.slice(tg.pos);
+    assert.ok(!/^<p\b[^>]*>\s*<a\b/.test(ab), 'a unter data-i18n-Absatz');
+  }
+  for (const tg of tags(slice).filter((x) => x.name === 'a')) {
+    assert.equal(tg.attrs.target, '_blank');
+    assert.equal(tg.attrs.rel, 'noopener noreferrer');
+    assert.equal(tg.attrs['aria-label'], undefined, 'aria-label überschriebe den sichtbaren Satz');
+  }
+});
+
+test('Fußzeile: CSS macht den Link zum Inline-Block mit Tippfläche, blendet den Zusatz nur optisch aus und unterstreicht den Link', () => {
+  assert.match(css, /a\.footer-link\s*\{\s*display: inline-block;\s*\}/);
+  assert.match(css, /\.visually-hidden\s*\{[^}]*position: absolute;[^}]*width: 1px;[^}]*height: 1px;[^}]*margin: -1px;[^}]*overflow: hidden;[^}]*clip-path: inset\(50%\);[^}]*white-space: nowrap;/);
+  assert.match(css, /footer a\.footer-link\s*\{[^}]*text-decoration: underline;/, 'Link nie nur durch Farbe kenntlich');
+});
+
+test('Fußzeile: die Texte nennen Quelle und Lizenz, die Datenschutzzeile trägt die Klammer mit dem gerundeten Standort', () => {
+  assert.match(de.footerWeather, /Open-Meteo\.com \(CC BY 4\.0\)/);
+  assert.match(de.footerElev, /Copernicus-Programms/);
+  assert.match(de.footerCode, /\(MIT\), © 2026 Dennismit2n/);
+  assert.match(de.footerPrivacy, /\(oder einmal dein auf etwa 100 m gerundeter Standort\)/);
+  assert.equal(de.footerExternal, 'öffnet fremde Seite');
+});
