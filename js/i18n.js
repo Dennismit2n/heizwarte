@@ -255,6 +255,9 @@
       // {what} ist der Wert des jeweiligen Beschriftungsschlüssels (settingsComfort, settingsLeadMin, …)
       stepDown: '{what} verringern',
       stepUp: '{what} erhöhen',
+      // Wert mit Einheit am Stepper; {n} ist die Zahl, formatiert mit höchstens einer Nachkommastelle
+      unitHours: '{n} h',
+      unitCelsius: '{n} °C',
       themeLabel: 'Darstellung',
       themeSystem: 'System',
       themeLight: 'Hell',

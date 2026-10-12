@@ -1,10 +1,11 @@
 /*
  * Heizwarte — Zustand, Einrichtung, Rendern und Abruf. Als einzige Datei darf app.js beim Laden etwas tun.
  *
- * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6) und der Hauptbildschirm bis zum
+ * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6), der Hauptbildschirm bis zum
  * Heizfahrplan: Kopfzeile, Statuszeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 bis 7) samt
- * Abruf (refresh) mit Cache je Ort. Kurve, Lüften, Einstellungen, Fußzeile und Service Worker kommen in den
- * nächsten Schritten dazu.
+ * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Der Weg
+ * „Ort hinzufügen“, Theme und Sprache, die Schwellen für Fortgeschrittene und die Kurve kommen in den nächsten
+ * Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
  * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
@@ -148,6 +149,83 @@
     if (end) { return end[1]; }
     const start = /^(\d+\s?[A-Za-z]?)(?=\s|$)/.exec(s);
     return start ? start[1] : '';
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Einstellungen: reine Logik (Stepper, Ortsname, Löschen, Höhe). Kein DOM, keine Module, in Node getestet.
+  // ---------------------------------------------------------------------------------------------
+
+  // Grenzen und Schritt der drei Stepper (Abschnitt 7): Raumtemperatur 17–23 °C, Aufheizzeit bei mildem Wetter
+  // 0,5–8 h, bei Frost 1–10 h, alle in Schritten zu 0,5. unit und label sind die Schlüssel für Einheit und Beschriftung.
+  const STEPPERS = {
+    comfort: { min: 17, max: 23, step: 0.5, unit: 'unitCelsius', label: 'settingsComfort' },
+    leadMin: { min: 0.5, max: 8, step: 0.5, unit: 'unitHours', label: 'settingsLeadMin' },
+    leadMax: { min: 1, max: 10, step: 0.5, unit: 'unitHours', label: 'settingsLeadMax' }
+  };
+  const STEP_FIELDS = ['comfort', 'leadMin', 'leadMax'];
+
+  function clampTo(spec, x) {
+    return Math.min(spec.max, Math.max(spec.min, x));
+  }
+
+  // Ein Schritt von value nach oben (dir > 0) oder unten: erst auf das 0,5-Raster gerundet, dann in den Grenzen
+  // gehalten. Ein Wert ohne Zahl startet bei der Standard-Raumtemperatur bzw. der unteren Grenze.
+  function stepValue(field, value, dir) {
+    const spec = STEPPERS[field];
+    if (!spec) { return value; }
+    const from = isNum(value) ? value : (field === 'comfort' ? DEFAULT_COMFORT : spec.min);
+    const snapped = Math.round(from / spec.step) * spec.step;
+    return clampTo(spec, snapped + (dir > 0 ? spec.step : -spec.step));
+  }
+
+  // leadMin ≤ leadMax (Bürg index:509–510): Der Wert, den der Nutzer gerade nicht anfasst, zieht mit. Er bleibt dabei
+  // in seinen eigenen Grenzen; weil leadMax nie unter 1 und leadMin nie über 8 geht, hält das die Ordnung.
+  function enforceOrder(values, changed) {
+    const out = { comfort: values.comfort, leadMin: values.leadMin, leadMax: values.leadMax };
+    if (isNum(out.leadMin) && isNum(out.leadMax) && out.leadMin > out.leadMax) {
+      if (changed === 'leadMax') {
+        out.leadMin = clampTo(STEPPERS.leadMin, out.leadMax);
+      } else {
+        out.leadMax = clampTo(STEPPERS.leadMax, out.leadMin);
+      }
+    }
+    return out;
+  }
+
+  // Alle drei Werte nach einem Schritt von field. values { comfort, leadMin, leadMax } bleibt unberührt, das Ergebnis
+  // ist ein neues Objekt. Ein unbekanntes Feld ändert nichts.
+  function applyStep(values, field, dir) {
+    const out = { comfort: values.comfort, leadMin: values.leadMin, leadMax: values.leadMax };
+    if (!STEPPERS[field]) { return out; }
+    out[field] = stepValue(field, values[field], dir);
+    return enforceOrder(out, field);
+  }
+
+  // Was die Einstellungen aus dem Höhenfeld speichern (Abschnitt 8, „Höhe in den Einstellungen“). parsed kommt von
+  // parseElev, autoElev ist die Antwort von geo.elevation (nur bei leerem Feld gebraucht). Eine Zahl heißt von Hand
+  // (elevAuto false); leer heißt automatisch (elevAuto true), und ohne Antwort des Dienstes bleibt elev null, dann
+  // nimmt Open-Meteo sein eigenes Höhenmodell. Ungültig ergibt null: nichts wird gespeichert.
+  function elevPatch(parsed, autoElev) {
+    if (!parsed) { return null; }
+    if (parsed.kind === 'ok') { return { elev: parsed.n, elevAuto: false }; }
+    if (parsed.kind === 'empty') { return { elev: isNum(autoElev) ? Math.round(autoElev) : null, elevAuto: true }; }
+    return null;
+  }
+
+  // Orte und aktiver Ort nach dem Löschen von deletedId. Der aktive Ort bleibt, solange es ihn gibt; sonst rückt der
+  // Ort nach, der an seine Stelle gerutscht ist (am Listenende der davor); ohne Ort bleibt null.
+  function afterDelete(places, deletedId, activeId) {
+    const index = places.findIndex((p) => p.id === deletedId);
+    const rest = places.filter((p) => p.id !== deletedId);
+    if (index < 0 || deletedId !== activeId) { return { places: rest, activeId, switched: false }; }
+    const next = rest[Math.min(index, rest.length - 1)];
+    return { places: rest, activeId: next ? next.id : null, switched: true };
+  }
+
+  // Ortsname aus dem Textfeld: getrimmt und auf 40 Zeichen gekürzt; ein leeres Feld behält den bisherigen Namen
+  function cleanLabel(raw, previous) {
+    const text = clip(String(raw === undefined || raw === null ? '' : raw).trim(), LABEL_MAX).trim();
+    return text === '' ? previous : text;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -638,16 +716,21 @@
     });
   }
 
-  // Inhalt des Höhenfelds: leer, Zahl im Bereich oder ungültig (auch „abc“ in einem number-Feld)
-  function readElev() {
-    const input = $('f-elev');
-    if (input.validity && input.validity.badInput) { return { kind: 'bad' }; }
-    const raw = input.value.trim();
-    if (raw === '') { return { kind: 'empty' }; }
-    const n = Number(raw);
+  // Inhalt eines Höhenfelds: leer, Zahl im Bereich −500…9000 (auf ganze Meter gerundet) oder ungültig (auch „abc“
+  // in einem number-Feld, das der Browser als badInput meldet). Rein; S4 und die Einstellungen teilen sich die Regel.
+  function parseElev(raw, badInput) {
+    if (badInput) { return { kind: 'bad' }; }
+    const text = String(raw === undefined || raw === null ? '' : raw).trim();
+    if (text === '') { return { kind: 'empty' }; }
+    const n = Number(text);
     if (!Number.isFinite(n) || n < ELEV_MIN || n > ELEV_MAX) { return { kind: 'bad' }; }
     const rounded = Math.round(n);
     return { kind: 'ok', n: rounded === 0 ? 0 : rounded };
+  }
+
+  function readElev() {
+    const input = $('f-elev');
+    return parseElev(input.value, !!(input.validity && input.validity.badInput));
   }
 
   function renderElevation() {
@@ -1606,13 +1689,352 @@
     guard(() => renderPlan(view));
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Einstellungen (s-settings, Abschnitt 8): Ortsliste, Heizart, drei Stepper, Höhe
+  // ---------------------------------------------------------------------------------------------
+
+  // Änderungen an Stepper und Heizart rechnen nur Ampel und Fahrplan neu, entprellt (Abschnitt 7)
+  const RECALC_MS = 150;
+  let recalcTimer = null;
+  // verwirft die späte Antwort einer Höhenabfrage, wenn inzwischen eine neue Eingabe gespeichert wurde
+  let settingsElevToken = 0;
+
+  // Löscht einen Schlüssel, außer die Daten stammen von einer neueren Fassung (dann schreibt app.js nichts)
+  function forget(key) {
+    if (state.newer) { return; }
+    storage.remove(key);
+    updateNotes();
+  }
+
+  function setAriaDisabled(btn, on) {
+    if (on) { btn.setAttribute('aria-disabled', 'true'); } else { btn.removeAttribute('aria-disabled'); }
+  }
+
+  function cancelRecalc() {
+    if (recalcTimer !== null) {
+      clearTimeout(recalcTimer);
+      recalcTimer = null;
+    }
+  }
+
+  // Ampel und Fahrplan mit der neuen Heizart und den neuen Zeiten; der Rest der Seite bleibt, wie er ist
+  function recalcVerdict() {
+    recalcTimer = null;
+    if (!state.place) { return; }
+    const view = guard(buildView);
+    state.verdict = view ? view.v : null;
+    guard(() => renderVerdict(view));
+    guard(() => renderPlan(view));
+  }
+
+  function scheduleRecalc() {
+    cancelRecalc();
+    recalcTimer = setTimeout(recalcVerdict, RECALC_MS);
+  }
+
+  // Die drei Zahlen des Orts; fehlt eine, gilt die Tabelle der Heizart (Nachtspeicher: keine Aufheizzeit)
+  function stepValues(place) {
+    const h = place.heat;
+    const base = heat.PROFILES[h.type] || heat.PROFILES.floorScreed;
+    return {
+      comfort: isNum(h.comfort) ? h.comfort : DEFAULT_COMFORT,
+      leadMin: isNum(h.leadMin) ? h.leadMin : base.leadMin,
+      leadMax: isNum(h.leadMax) ? h.leadMax : base.leadMax
+    };
+  }
+
+  // Zahl mit Einheit in der Mitte, Beschriftung der Knöpfe aus stepDown/stepUp; am Rand bleibt der Knopf
+  // fokussierbar (aria-disabled), sieht aber gedämpft aus. Bei der Heizart Nachtspeicher entfallen beide Aufheizzeiten.
+  function renderSteppers() {
+    const place = state.place;
+    if (!place) { return; }
+    const values = stepValues(place);
+    const noLead = place.heat.type === 'storage';
+    $('stepLeadMin').hidden = noLead;
+    $('stepLeadMax').hidden = noLead;
+    for (const field of STEP_FIELDS) {
+      const spec = STEPPERS[field];
+      const value = values[field];
+      const what = t(spec.label);
+      const down = $(field + 'Down');
+      const up = $(field + 'Up');
+      $(field + 'Out').textContent = isNum(value) ? t(spec.unit, { n: numAuto(value) }) : '';
+      down.setAttribute('aria-label', t('stepDown', { what }));
+      up.setAttribute('aria-label', t('stepUp', { what }));
+      setAriaDisabled(down, isNum(value) && value <= spec.min);
+      setAriaDisabled(up, isNum(value) && value >= spec.max);
+    }
+  }
+
+  function onStep(field, dir) {
+    const place = state.place;
+    if (!place || (place.heat.type === 'storage' && field !== 'comfort')) { return; }
+    const before = stepValues(place);
+    const after = applyStep(before, field, dir);
+    if (after.comfort === before.comfort && after.leadMin === before.leadMin && after.leadMax === before.leadMax) { return; }
+    place.heat.comfort = after.comfort;
+    place.heat.leadMin = after.leadMin;
+    place.heat.leadMax = after.leadMax;
+    persist('places', state.places);
+    renderSteppers();
+    scheduleRecalc();
+  }
+
+  // Heizart gewählt: Wechsel setzt confirmed true und, nur bei neuer Heizart, die Aufheizzeiten (applyHeatType)
+  function onSettingsHeat(e) {
+    const place = state.place;
+    const type = e && e.target ? e.target.value : '';
+    if (!place || HEAT_TYPES.indexOf(type) < 0) { return; }
+    applyHeatType(place, type, true);
+    persist('places', state.places);
+    renderSteppers();
+    scheduleRecalc();
+  }
+
+  // Höhe: Anzeige wie in S4 (setupElev, setupElevAuto, setupElevUnknown); das Feld wird nur befüllt, solange es zu ist
+  function renderSettingsElev() {
+    const place = state.place;
+    if (!place) { return; }
+    const known = isNum(place.elev);
+    $('settingsElevVal').textContent = known ? t('setupElev', { m: i18n.fmt.num(place.elev, 0) }) : t('setupElevUnknown');
+    $('settingsElevAuto').hidden = !(known && place.elevAuto);
+    if ($('settingsElevEdit').hidden) { $('settingsElevInput').value = known ? String(place.elev) : ''; }
+  }
+
+  function clearElevError() {
+    $('settingsElevErr').replaceChildren();
+    $('settingsElevInput').removeAttribute('aria-invalid');
+  }
+
+  function openSettingsElev(open) {
+    $('settingsElevEdit').hidden = !open;
+    $('btnSettingsElev').setAttribute('aria-expanded', open ? 'true' : 'false');
+    clearElevError();
+    renderSettingsElev();
+    if (open) { $('settingsElevInput').focus(); }
+  }
+
+  // Gespeichert wird beim change des Felds (Enter oder Verlassen). Eine Zahl gilt von Hand; ein leeres Feld fragt die
+  // Höhe neu ab und gilt als automatisch. Danach holt refresh(true) das Wetter für die neue Höhe, denn sie steckt in der
+  // Forecast-URL und der Cache stammt von der alten. Ungültig wird nicht gespeichert; der Satz steht in der
+  // Alert-Zeile unter dem Feld, der Fokus bleibt, wo er ist (der change kommt oft erst beim Verlassen des Felds).
+  async function onElevCommit() {
+    const place = state.place;
+    if (!place) { return; }
+    const input = $('settingsElevInput');
+    const token = ++settingsElevToken;
+    clearElevError();
+    const parsed = parseElev(input.value, !!(input.validity && input.validity.badInput));
+    if (parsed.kind === 'bad') {
+      input.setAttribute('aria-invalid', 'true');
+      $('settingsElevErr').appendChild(make('p', '', t('errElevRange')));
+      return;
+    }
+    let auto = null;
+    if (parsed.kind === 'empty') {
+      // geo.elevation rundet auf drei Stellen (die Koordinaten des Orts sind es schon) und wirft nie
+      auto = await geo.elevation(place.lat, place.lon);
+      if (token !== settingsElevToken || state.place !== place) { return; }
+    }
+    const patch = elevPatch(parsed, auto);
+    if (!patch) { return; }
+    place.elev = patch.elev;
+    place.elevAuto = patch.elevAuto;
+    persist('places', state.places);
+    if (parsed.kind === 'empty') { input.value = patch.elev === null ? '' : String(patch.elev); }
+    renderSettingsElev();
+    // Lief schon ein Abruf mit der alten Höhe, hängt sich refresh() nur an ihn an: danach noch einmal
+    const running = inflight.has(place.id);
+    const job = refresh(true);
+    if (running) {
+      job.then(() => { if (state.activeId === place.id) { refresh(true); } });
+    }
+  }
+
+  // Ortswechsel per Radio: derselbe Weg wie der Umschalter im Kopf (hw:active, Cache zeigen, refresh(true))
+  function onPlacePick(id) {
+    if (id === state.activeId) { return; }
+    activatePlace(id);
+    renderSettingsActive();
+  }
+
+  // Name geändert (change): getrimmt, auf 40 Zeichen; leer behält den alten. Die Liste wird nicht neu gebaut, damit der
+  // Fokus nicht verloren geht. Gibt true zurück, wenn sich der Name geändert hat.
+  function onRename(id, input) {
+    const place = placeById(id);
+    if (!place) { return false; }
+    const next = cleanLabel(input.value, place.label);
+    input.value = next;
+    if (next === place.label) { return false; }
+    place.label = next;
+    persist('places', state.places);
+    if (id === state.activeId) { $('settingsHeatPlace').textContent = next; }
+    return true;
+  }
+
+  // Löschen. Der letzte Ort nimmt alles mit: dann beginnt die Einrichtung bei S1. Sonst rückt, falls es der aktive
+  // war, ein anderer Ort nach (hw:active, Cache zeigen, refresh(true)), und der Fokus geht auf die Überschrift.
+  function deletePlace(id) {
+    if (!placeById(id)) { return; }
+    const next = afterDelete(state.places, id, state.activeId);
+    state.places = next.places;
+    persist('places', state.places);
+    forget('cache:' + id);
+    if (state.places.length === 0) {
+      cancelRecalc();
+      forget('active');
+      state.activeId = null;
+      state.place = null;
+      state.cache = null;
+      state.model = null;
+      state.verdict = null;
+      state.source = 'none';
+      state.status = null;
+      state.lastFetchMs = 0;
+      state.problems = [];
+      showSetup();
+      return;
+    }
+    if (next.switched) { activatePlace(next.activeId); }
+    renderSettings();
+    const h2 = $('s-settings').querySelector('h2');
+    if (h2) { h2.focus(); }
+  }
+
+  // Ein Ort der Liste: Name als Textfeld, Radio „Diesen Ort anzeigen“, Löschen mit Rückfrage. Die Rückfrage ist ein
+  // zweiter Knopf, dessen Text die Frage ist (settingsDeleteConfirm; beim einzigen Ort settingsDeleteLast), daneben
+  // „Abbrechen“; keine confirm()-Box. Nur eine Rückfrage zur Zeit.
+  function placeItem(p, only, closeOthers) {
+    const li = make('li', 'place-item');
+
+    const field = make('div', 'field');
+    const nameId = 'placeNameField-' + p.id;
+    const label = make('label', '', t('setupLabel'));
+    label.htmlFor = nameId;
+    const input = make('input');
+    input.type = 'text';
+    input.id = nameId;
+    input.value = p.label;
+    input.maxLength = LABEL_MAX;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    field.appendChild(label);
+    field.appendChild(input);
+    li.appendChild(field);
+
+    const choice = make('label', 'choice');
+    const radio = make('input');
+    radio.type = 'radio';
+    radio.name = 'settingsPlace';
+    radio.value = p.id;
+    radio.checked = p.id === state.activeId;
+    const dot = make('span', 'dot');
+    dot.setAttribute('aria-hidden', 'true');
+    const body = make('span', 'choice-body');
+    body.appendChild(make('span', 'choice-title', t('settingsPlaceActive')));
+    // der Name steht mit im Label des Radios: Bei mehreren Orten sagt „Diesen Ort anzeigen“ allein nicht, welcher gemeint ist
+    const nameHint = make('span', 'choice-hint', p.label);
+    body.appendChild(nameHint);
+    choice.appendChild(radio);
+    choice.appendChild(dot);
+    choice.appendChild(body);
+    li.appendChild(choice);
+    radio.addEventListener('change', () => { if (radio.checked) { onPlacePick(p.id); } });
+
+    const del = make('div', 'place-del');
+    const delBtn = make('button', 'danger', t('btnDelete'));
+    delBtn.type = 'button';
+    delBtn.setAttribute('aria-expanded', 'false');
+    const box = make('div', 'place-confirm');
+    box.id = 'placeConfirm-' + p.id;
+    box.hidden = true;
+    delBtn.setAttribute('aria-controls', box.id);
+    const question = () => (only
+      ? t('settingsDeleteLast', { name: p.label })
+      : t('settingsDeleteConfirm', { name: p.label }));
+    const yes = make('button', 'danger', question());
+    yes.type = 'button';
+    const no = make('button', '', t('btnCancel'));
+    no.type = 'button';
+    box.appendChild(yes);
+    box.appendChild(no);
+    del.appendChild(delBtn);
+    del.appendChild(box);
+    li.appendChild(del);
+
+    const close = () => {
+      box.hidden = true;
+      delBtn.setAttribute('aria-expanded', 'false');
+    };
+    li.closeConfirm = close;
+    delBtn.addEventListener('click', () => {
+      const open = box.hidden;
+      closeOthers();
+      if (open) {
+        box.hidden = false;
+        delBtn.setAttribute('aria-expanded', 'true');
+        yes.focus();
+      }
+    });
+    no.addEventListener('click', () => {
+      close();
+      delBtn.focus();
+    });
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        close();
+        delBtn.focus();
+      }
+    });
+    yes.addEventListener('click', () => deletePlace(p.id));
+
+    input.addEventListener('change', () => {
+      if (onRename(p.id, input)) {
+        yes.textContent = question();
+        nameHint.textContent = p.label;
+      }
+    });
+    return li;
+  }
+
+  function renderSettingsPlaces() {
+    const list = $('settingsPlaceList');
+    list.replaceChildren();
+    const only = state.places.length === 1;
+    const closeOthers = () => {
+      for (const li of list.children) { if (li.closeConfirm) { li.closeConfirm(); } }
+    };
+    for (const p of state.places) { list.appendChild(placeItem(p, only, closeOthers)); }
+  }
+
+  // Alles, was zum aktiven Ort gehört: Name, Heizart, Stepper, Höhe
+  function renderSettingsActive() {
+    const place = state.place;
+    if (!place) { return; }
+    $('settingsHeatPlace').textContent = place.label;
+    for (const radio of document.querySelectorAll('input[name="settingsHeatType"]')) {
+      radio.checked = radio.value === place.heat.type;
+    }
+    renderSteppers();
+    renderSettingsElev();
+  }
+
+  function renderSettings() {
+    guard(renderSettingsPlaces);
+    guard(renderSettingsActive);
+  }
+
   function onSettingsOpen() {
     state.setup = null;
+    openSettingsElev(false);
+    renderSettings();
     showScreen('s-settings');
   }
 
-  // „Zurück“ aus den Einstellungen: der Fokus kehrt auf den Knopf zurück, der sie geöffnet hat
+  // „Zurück“ aus den Einstellungen (oben und unten): showMain zeichnet alles neu, der Fokus kehrt auf den Knopf
+  // zurück, der die Einstellungen geöffnet hat
   function onSettingsBack() {
+    cancelRecalc();
     showMain();
     $('settingsBtn').focus();
   }
@@ -1652,6 +2074,7 @@
     if (state.screen === 's-hits') { renderHits(); }
     if (state.screen === 's-confirm') { renderConfirm(); }
     if (state.screen === 's-main') { render(); }
+    if (state.screen === 's-settings') { renderSettings(); }
   }
 
   function on(id, type, fn) {
@@ -1705,7 +2128,20 @@
     on('reload', 'click', () => { refresh(true); });
     on('settingsBtn', 'click', onSettingsOpen);
     on('btnSettingsBack', 'click', onSettingsBack);
+    on('btnSettingsBack2', 'click', onSettingsBack);
     on('placeSelect', 'change', onPlaceChange);
+
+    // Einstellungen: Heizart als Radiokarten, drei Stepper, Höhe
+    for (const radio of document.querySelectorAll('input[name="settingsHeatType"]')) {
+      radio.addEventListener('change', onSettingsHeat);
+    }
+    for (const field of STEP_FIELDS) {
+      on(field + 'Down', 'click', () => onStep(field, -1));
+      on(field + 'Up', 'click', () => onStep(field, 1));
+    }
+    on('btnSettingsElev', 'click', () => openSettingsElev($('settingsElevEdit').hidden));
+    on('settingsElevInput', 'change', onElevCommit);
+    on('settingsElevInput', 'input', clearElevError);
   }
 
   // Service Worker nur über https oder auf localhost (dort sieht ihn auch der Offline-Smoke-Test).
@@ -1750,7 +2186,7 @@
     }
     document.addEventListener('visibilitychange', onVisible);
     registerWorker();
-    // Es folgen: Einstellungen, Größenänderung der Kurve (spätere Schritte)
+    // Es folgen: Größenänderung der Kurve (spätere Schritte)
   }
 
   if (typeof document !== 'undefined') {
@@ -1762,9 +2198,13 @@
   }
 
   // Nur für Node-Tests (tests/app.test.js): die reinen Funktionen von Ampel, Fahrplan, Statuszeile, Jetzt-Block,
-  // Umriss und Hausnummer sowie die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt). Im Browser gibt
+  // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
+  // Einstellungen (STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel). Im Browser gibt
   // es kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen };
+    module.exports = {
+      verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+      STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel
+    };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
