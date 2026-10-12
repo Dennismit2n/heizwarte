@@ -750,13 +750,13 @@ test('Service Worker: Registrierung in init() nur über https oder localhost, Fe
   assert.ok(funktion(appCode, 'init').includes('registerWorker();'), 'init() ruft die Registrierung');
 });
 
-test('Manifest und Kopf: Manifest-Link, theme-color, Manifest ohne id in Meilenstein 1', () => {
+test('Manifest und Kopf: Manifest-Link, theme-color, Manifest-id /heizwarte/ ab Meilenstein 2', () => {
   const link = all.find((tg) => tg.name === 'link' && tg.attrs.rel === 'manifest');
   assert.equal(link.attrs.href, './manifest.webmanifest');
   const theme = all.find((tg) => tg.name === 'meta' && tg.attrs.name === 'theme-color');
   assert.equal(theme.attrs.content, '#111821');
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
-  assert.equal(Object.prototype.hasOwnProperty.call(manifest, 'id'), false, 'Meilenstein 1 deployt ohne id (BAUPLAN Abschnitt 9)');
+  assert.equal(manifest.id, '/heizwarte/', 'ab Meilenstein 2 trägt das Manifest id /heizwarte/ (BAUPLAN Abschnitt 9)');
   assert.equal(manifest.theme_color, '#111821');
   assert.equal(manifest.background_color, '#111821');
 });
