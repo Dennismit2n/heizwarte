@@ -1,5 +1,5 @@
 /*
- * Heizwarte — Tests für js/weather.js: Adressen, Abruf (fetchJSON, load) und das Zeitzonen-Modell auf unixtime
+ * Heizwarte — Tests für js/weather.js: Adressen, Abruf (fetchJSON, fetchWithRetry, load) und das Zeitzonen-Modell auf unixtime
  *
  * Alle Dienste laufen gegen Fixtures über fakeFetch (tests/_fake.js), nie gegen das Netz. Die Ortszeit der Tests
  * kommt immer aus om.timezone bzw. einer ausdrücklichen Zone, nie aus der Zeitzone des Rechners: die Erwartungen
@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
-const { fakeFetch } = require('./_fake.js');
+const { fakeFetch, fakeSleep } = require('./_fake.js');
 const weather = Heizwarte.weather;
 
 const HOUR = 3600000;
@@ -77,6 +77,17 @@ function urlsMit(f, teil) {
   return f.calls.map((c) => c.url).filter((u) => u.includes(teil));
 }
 
+// Antwortfolge aus tests/fixtures/retry.json für fakeFetch; ein body "@datei.json" wird durch die Fixture ersetzt
+function folge(name) {
+  const liste = fixture('retry.json')[name];
+  assert.ok(Array.isArray(liste), 'retry.json kennt die Folge ' + name + ' nicht');
+  return liste.map((spec) => {
+    const s = clone(spec);
+    if (typeof s.body === 'string' && s.body.startsWith('@')) { s.body = fixture(s.body.slice(1)); }
+    return s;
+  });
+}
+
 // Ein Abruf, der nie antwortet; er bricht nur ab, wenn das Signal ausgelöst wird
 function haengendesFetch() {
   const f = (url, init) => new Promise((resolve, reject) => {
@@ -110,7 +121,7 @@ function sollOrtszeit(lens) {
 // ---------------------------------------------------------------------------------------------
 
 test('weather.js: Schnittstelle aus Abschnitt 5 und globaler Name', () => {
-  for (const name of ['modelFor', 'omUrl', 'bsUrls', 'fetchJSON', 'load', 'tzSafe', 'localNow', 'dayKeyOf', 'model']) {
+  for (const name of ['modelFor', 'omUrl', 'bsUrls', 'fetchJSON', 'fetchWithRetry', 'load', 'tzSafe', 'localNow', 'dayKeyOf', 'model']) {
     assert.equal(typeof weather[name], 'function', name);
   }
   assert.equal(typeof weather.OpenMeteoError, 'function');
@@ -270,6 +281,191 @@ test('fetchJSON: nach der Frist kommt timeout, das Signal wird ausgelöst, auch 
   // ein fetch, das das Signal gar nicht beachtet, bremst die Frist trotzdem nicht aus
   const taub = () => new Promise(() => {});
   assert.equal((await weather.fetchJSON('https://example.test/', { fetchImpl: taub, timeoutMs: 20 })).error, 'timeout');
+});
+
+// ---------------------------------------------------------------------------------------------
+// fetchWithRetry
+// ---------------------------------------------------------------------------------------------
+
+const RETRY_URL = 'https://example.test/forecast';
+
+// Ruft fetchWithRetry mit einer Folge aus retry.json und schreibt alles mit: die Reihenfolge der Ereignisse (Meldung
+// an die Oberfläche vor dem Warten), die Wartezeiten (fakeSleep) und die Abrufe (fakeFetch)
+async function mitFolge(name, opts) {
+  const f = fakeFetch([['/forecast', folge(name)]]);
+  const sleep = fakeSleep();
+  const ereignisse = [];
+  const r = await weather.fetchWithRetry(RETRY_URL, Object.assign({
+    fetchImpl: f,
+    sleep: async (ms) => { ereignisse.push('sleep:' + ms); await sleep(ms); },
+    onWait: (ms) => ereignisse.push('onWait:' + ms),
+    onWaiting: (e) => ereignisse.push('onWaiting:' + JSON.stringify(e))
+  }, opts || {}));
+  return { r, f, sleep, ereignisse };
+}
+
+test('fetchWithRetry: 429, dann 200 – die Daten kommen an, genau ein sleep(60000), vorher die Meldung an die Oberfläche', async () => {
+  const { r, f, sleep, ereignisse } = await mitFolge('429-dann-200');
+  assert.equal(r.ok, true);
+  assert.equal(r.status, 200);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.json, fixture('om-buerg-2026-10-09.json'));
+  assert.deepEqual(sleep.calls, [60000], 'genau ein sleep, 60 s');
+  assert.equal(f.count(), 2, 'erster Versuch plus genau ein zweiter');
+  assert.deepEqual(f.calls.map((c) => c.url), [RETRY_URL, RETRY_URL], 'derselbe Aufruf noch einmal');
+  assert.notEqual(f.calls[0].init.signal, f.calls[1].init.signal, 'jeder Versuch hat seine eigene Frist');
+  assert.equal(f.calls[1].init.signal.aborted, false);
+  // die Statuszeile bekommt die Wartezeit, bevor gewartet wird (statusWaiting{s}, s in ganzen Sekunden)
+  assert.deepEqual(ereignisse, ['onWait:60000', 'onWaiting:{"s":60,"ms":60000}', 'sleep:60000']);
+});
+
+test('fetchWithRetry: 429, dann 429 – kein Wurf, das Ergebnis ist der zweite 429, kein dritter Versuch', async () => {
+  const { r, f, sleep } = await mitFolge('429-dann-429');
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 429);
+  assert.equal(r.error, 'http');
+  assert.equal(r.json.error, true);
+  assert.deepEqual(sleep.calls, [60000]);
+  assert.equal(f.count(), 2);
+});
+
+test('fetchWithRetry: Retry-After 30 wartet trotzdem 60 s – 60 s sind das Minimum', async () => {
+  const { r, f, sleep, ereignisse } = await mitFolge('retry-after-30');
+  assert.equal(r.ok, true);
+  assert.deepEqual(sleep.calls, [60000]);
+  assert.equal(f.count(), 2);
+  assert.deepEqual(ereignisse, ['onWait:60000', 'onWaiting:{"s":60,"ms":60000}', 'sleep:60000']);
+});
+
+test('fetchWithRetry: Retry-After hebt die Wartezeit über 60 s, höchstens aber auf 120 s (wie update.py:25–37)', async () => {
+  const tabelle = [
+    ['retry-after-0', 60000],
+    ['retry-after-30', 60000],
+    ['retry-after-90', 90000],
+    ['retry-after-120', 120000],
+    ['retry-after-300', 120000],
+    ['retry-after-unlesbar', 60000],     // „bald“ ist keine Zahl
+    ['retry-after-datum', 60000]         // eine HTTP-Datumsangabe ist nicht lesbar und gilt wie kein Kopf
+  ];
+  for (const [name, soll] of tabelle) {
+    const { r, f, sleep, ereignisse } = await mitFolge(name);
+    assert.equal(r.ok, true, name);
+    assert.deepEqual(sleep.calls, [soll], name);
+    assert.equal(f.count(), 2, name);
+    assert.deepEqual(ereignisse, ['onWait:' + soll, 'onWaiting:' + JSON.stringify({ s: soll / 1000, ms: soll }), 'sleep:' + soll], name);
+  }
+});
+
+test('fetchWithRetry: gleich im ersten Versuch gut – kein sleep, keine Meldung, ein Abruf', async () => {
+  const { r, f, sleep, ereignisse } = await mitFolge('200');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.json, fixture('om-buerg-2026-10-09.json'));
+  assert.equal(sleep.count, 0);
+  assert.equal(f.count(), 1);
+  assert.deepEqual(ereignisse, []);
+});
+
+test('fetchWithRetry: 500, 503, 404, Netzfehler und Zeitüberschreitung werden nicht wiederholt', async () => {
+  for (const [name, status] of [['500-dann-200', 500], ['503-dann-200', 503]]) {
+    const { r, f, sleep, ereignisse } = await mitFolge(name);
+    assert.equal(r.ok, false, name);
+    assert.equal(r.status, status, name);
+    assert.equal(r.error, 'http', name);
+    assert.equal(sleep.count, 0, name + ': auch ein Retry-After-Kopf macht aus 5xx keinen Wiederholungsgrund');
+    assert.equal(f.count(), 1, name);
+    assert.deepEqual(ereignisse, [], name);
+  }
+
+  const nichts = fakeFetch({ '/forecast': { status: 404, body: { detail: 'weg' } } });
+  const s404 = fakeSleep();
+  const r404 = await weather.fetchWithRetry(RETRY_URL, { fetchImpl: nichts, sleep: s404 });
+  assert.equal(r404.status, 404);
+  assert.equal(nichts.count(), 1);
+  assert.equal(s404.count, 0);
+
+  const weg = fakeFetch({ '/forecast': { throws: true } });
+  const sWeg = fakeSleep();
+  const rWeg = await weather.fetchWithRetry(RETRY_URL, { fetchImpl: weg, sleep: sWeg });
+  assert.deepEqual(rWeg, { ok: false, status: 0, json: null, error: 'offline' });
+  assert.equal(weg.count(), 1);
+  assert.equal(sWeg.count, 0);
+
+  const haengt = haengendesFetch();
+  const sHaengt = fakeSleep();
+  const rHaengt = await weather.fetchWithRetry(RETRY_URL, { fetchImpl: haengt, sleep: sHaengt, timeoutMs: 20 });
+  assert.deepEqual(rHaengt, { ok: false, status: 0, json: null, error: 'timeout' });
+  assert.equal(haengt.signals.length, 1);
+  assert.equal(sHaengt.count, 0);
+});
+
+test('fetchWithRetry: retryOn und waitMs ändern den Anlass und das Mindestmaß, Retry-After bleibt gedeckelt', async () => {
+  // 503 statt 429 als Anlass
+  const a = await mitFolge('503-dann-200', { retryOn: [503] });
+  assert.equal(a.r.ok, true);
+  assert.deepEqual(a.sleep.calls, [60000], 'Retry-After 30 liegt unter dem Mindestmaß');
+  const b = await mitFolge('429-dann-200', { retryOn: [503] });
+  assert.equal(b.r.status, 429, 'ein 429 ist dann kein Anlass');
+  assert.equal(b.sleep.count, 0);
+  assert.equal(b.f.count(), 1);
+
+  // kürzeres Mindestmaß; ein lesbarer Retry-After darüber gilt weiter, bis 120 s
+  const c = await mitFolge('429-dann-200', { waitMs: 5000 });
+  assert.deepEqual(c.sleep.calls, [5000]);
+  assert.deepEqual(c.ereignisse, ['onWait:5000', 'onWaiting:{"s":5,"ms":5000}', 'sleep:5000']);
+  assert.deepEqual((await mitFolge('retry-after-30', { waitMs: 5000 })).sleep.calls, [30000]);
+  assert.deepEqual((await mitFolge('retry-after-300', { waitMs: 5000 })).sleep.calls, [120000]);
+
+  // unbrauchbares waitMs fällt auf 60 s zurück
+  for (const schlecht of [-1, NaN, Infinity, '5000', null]) {
+    assert.deepEqual((await mitFolge('429-dann-200', { waitMs: schlecht })).sleep.calls, [60000], String(schlecht));
+  }
+});
+
+test('fetchWithRetry: halbe Sekunden werden für die Anzeige aufgerundet', async () => {
+  const { sleep, ereignisse } = await mitFolge('429-dann-200', { waitMs: 1500 });
+  assert.deepEqual(sleep.calls, [1500]);
+  assert.deepEqual(ereignisse, ['onWait:1500', 'onWaiting:{"s":2,"ms":1500}', 'sleep:1500']);
+});
+
+test('fetchWithRetry: ein werfender Beobachter stört den Abruf nicht', async () => {
+  const f = fakeFetch([['/forecast', folge('429-dann-200')]]);
+  const sleep = fakeSleep();
+  const r = await weather.fetchWithRetry(RETRY_URL, {
+    fetchImpl: f,
+    sleep,
+    onWait() { throw new Error('Oberfläche kaputt'); },
+    onWaiting() { throw new Error('Oberfläche kaputt'); }
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(sleep.calls, [60000]);
+  assert.equal(f.count(), 2);
+});
+
+test('fetchWithRetry: Antworten ohne lesbare Köpfe warten das Mindestmaß, kein Wurf', async () => {
+  const antworten = [
+    { ok: false, status: 429, json: async () => ({}) },                                                 // gar keine Köpfe
+    { ok: false, status: 429, headers: { get() { throw new Error('gesperrt'); } }, json: async () => ({}) },
+    { ok: false, status: 429, headers: { get: () => undefined }, json: async () => ({}) }
+  ];
+  for (const erste of antworten) {
+    let n = 0;
+    const fetchImpl = async () => (n++ === 0 ? erste : { ok: true, status: 200, json: async () => ({ ok: 1 }) });
+    const sleep = fakeSleep();
+    const r = await weather.fetchWithRetry(RETRY_URL, { fetchImpl, sleep });
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.json, { ok: 1 });
+    assert.deepEqual(sleep.calls, [60000]);
+    assert.equal(n, 2);
+  }
+});
+
+test('fetchWithRetry: ohne eingespeistes sleep wartet es wirklich (setTimeout)', async () => {
+  const f = fakeFetch([['/forecast', folge('429-dann-200')]]);
+  const t0 = Date.now();
+  const r = await weather.fetchWithRetry(RETRY_URL, { fetchImpl: f, waitMs: 30 });
+  assert.equal(r.ok, true);
+  assert.ok(Date.now() - t0 >= 20, 'es hat nicht gewartet');
+  assert.equal(f.count(), 2);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -571,7 +767,8 @@ async function omFehler(antwort, opts) {
   const f = dienste({ '/v1/forecast': antwort });
   let gefangen = null;
   try {
-    await weather.load(BUERG, Object.assign({ fetchImpl: f, nowMs: BUERG_NOW_MS }, opts || {}));
+    // sleep ist immer eingespeist: ein 429 würde sonst wirklich 60 s warten
+    await weather.load(BUERG, Object.assign({ fetchImpl: f, nowMs: BUERG_NOW_MS, sleep: fakeSleep() }, opts || {}));
   } catch (e) {
     gefangen = e;
   }
@@ -626,6 +823,78 @@ test('load: ein Ort ohne Koordinaten wirft invalid, bevor irgendetwas gesendet w
     await assert.rejects(weather.load(ort, { fetchImpl: f }), (e) => e instanceof weather.OpenMeteoError && e.code === 'invalid');
     assert.equal(f.count(), 0);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// load: HTTP 429 von Open-Meteo
+// ---------------------------------------------------------------------------------------------
+
+test('load: 429, dann 200 – der Cache kommt an, genau ein sleep(60000), Bright Sky läuft erst danach, je Dienst einmal', async () => {
+  for (const name of ['429-dann-200', '429-tageslimit-dann-200']) {
+    const f = dienste({ '/v1/forecast': folge(name) });
+    const sleep = fakeSleep();
+    const gemeldet = [];
+    const { cache, problems } = await weather.load(BUERG, {
+      fetchImpl: f,
+      sleep,
+      nowMs: BUERG_NOW_MS,
+      onWait: (ms) => gemeldet.push(['onWait', ms]),
+      onWaiting: (e) => gemeldet.push(['onWaiting', e])
+    });
+    assert.deepEqual(cache.om, fixture('om-buerg-2026-10-09.json'), name);
+    assert.deepEqual(problems, [], name);
+    assert.deepEqual(sleep.calls, [60000], name);
+    assert.deepEqual(gemeldet, [['onWait', 60000], ['onWaiting', { s: 60, ms: 60000 }]], name);
+    assert.equal(urlsMit(f, '/v1/forecast').length, 2, name);
+    assert.equal(urlsMit(f, '/weather?').length, 1, name);
+    assert.equal(urlsMit(f, '/alerts?').length, 1, name);
+    assert.deepEqual(f.calls.slice(0, 2).map((c) => c.url.includes('/v1/forecast')), [true, true], name + ': Bright Sky erst nach der Antwort');
+  }
+});
+
+test('load: 429, dann 429 – OpenMeteoError „rate“, ein sleep, zwei Abrufe, Bright Sky wird nicht gefragt', async () => {
+  const f = dienste({ '/v1/forecast': folge('429-dann-429') });
+  const sleep = fakeSleep();
+  await assert.rejects(weather.load(BUERG, { fetchImpl: f, sleep, nowMs: BUERG_NOW_MS }), (e) => {
+    assert.ok(e instanceof weather.OpenMeteoError);
+    assert.equal(e.code, 'rate');
+    assert.ok(e.message.includes('429'), e.message);
+    return true;
+  });
+  assert.deepEqual(sleep.calls, [60000]);
+  assert.equal(urlsMit(f, '/v1/forecast').length, 2);
+  assert.equal(f.count('brightsky'), 0);
+});
+
+test('load: Retry-After 30 wartet 60 s, 90 wartet 90 s, 300 wartet 120 s', async () => {
+  for (const [name, soll] of [['retry-after-30', 60000], ['retry-after-90', 90000], ['retry-after-300', 120000]]) {
+    const f = dienste({ '/v1/forecast': folge(name) });
+    const sleep = fakeSleep();
+    const gemeldet = [];
+    const { cache } = await weather.load(BUERG, { fetchImpl: f, sleep, nowMs: BUERG_NOW_MS, onWaiting: (e) => gemeldet.push(e) });
+    assert.deepEqual(cache.om, fixture('om-buerg-2026-10-09.json'), name);
+    assert.deepEqual(sleep.calls, [soll], name);
+    assert.deepEqual(gemeldet, [{ s: soll / 1000, ms: soll }], name);
+  }
+});
+
+test('load: 5xx von Open-Meteo wird nicht wiederholt, ein 429 von Bright Sky auch nicht', async () => {
+  const f5 = dienste({ '/v1/forecast': folge('500-dann-200') });
+  const s5 = fakeSleep();
+  await assert.rejects(weather.load(BUERG, { fetchImpl: f5, sleep: s5, nowMs: BUERG_NOW_MS }),
+    (e) => e instanceof weather.OpenMeteoError && e.code === 'http');
+  assert.equal(s5.count, 0);
+  assert.equal(urlsMit(f5, '/v1/forecast').length, 1);
+
+  const fb = dienste({ '/weather?': { status: 429 }, '/alerts?': { status: 429 } });
+  const sb = fakeSleep();
+  const { cache, problems } = await weather.load(BUERG, { fetchImpl: fb, sleep: sb, nowMs: BUERG_NOW_MS });
+  assert.deepEqual(problems, ['mosFailed', 'alertsFailed']);
+  assert.deepEqual(cache.mos, []);
+  assert.equal(sb.count, 0);
+  assert.equal(urlsMit(fb, '/weather?').length, 1);
+  assert.equal(urlsMit(fb, '/alerts?').length, 1);
+  assert.equal(urlsMit(fb, '/v1/forecast').length, 1);
 });
 
 // ---------------------------------------------------------------------------------------------
