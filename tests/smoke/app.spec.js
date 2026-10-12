@@ -9,7 +9,7 @@
  * kommen aus den deutschen Planschlüsseln in js/i18n.js (I18N.de), nicht abgeschrieben aus der Oberfläche.
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
- * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen, Schwellen
+ * kommen mit den Meilensteinen 3 und 5 dazu; Fall 11 („Mehr anzeigen“: Kurve und Lüften, hw:more), Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen, Schwellen
  * „Für Fortgeschrittene“), Fall 13 (Theme System/Hell/Dunkel), Fall 14 (Stufenzeile als Text) und Fall 17 (mehrere Orte: Nachtrag, Umschalter, Wechsel
  * während eines Abrufs, Maximum fünf) stehen schon.
  * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5. Fall 3 läuft
@@ -765,6 +765,125 @@ test('Fall 10: visibilitychange ruft erneut ab, aber nicht innerhalb von 60 Seku
   await expect.poll(() => net.count('forecast')).toBe(first + 1);
   await expect(page.locator('#reload')).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.locator('#nowTemp')).toContainText('°');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 11: „Mehr anzeigen“ (BAUPLAN Abschnitt 8, Blöcke 8 bis 10; Entscheidung 9): Kurve (bis jetzt ein Gerüst) und
+// Lüften liegen hinter einem großen Knopf, die Wahl bleibt in hw:more
+// ---------------------------------------------------------------------------------------------
+
+// Der gespeicherte Wert von hw:more (roher JSON-Text oder null)
+function storedMore(page) {
+  return page.evaluate(() => localStorage.getItem('hw:more'));
+}
+
+// Der Fokus liegt auf dem Knopf „Mehr/Weniger anzeigen“ (Disclosure-Muster)
+async function expectFocusOnMore(page) {
+  await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.id), {
+    message: 'Fokus auf #more'
+  }).toBe('more');
+}
+
+test('Fall 11: „Mehr anzeigen“ klappt Kurve und Lüften auf, bleibt nach dem Neuladen offen, „Weniger anzeigen“ löscht hw:more', async ({ page }) => {
+  const net = await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+
+  const more = page.locator('#more');
+  const chart = page.locator('#chart');
+  const air = page.locator('#air');
+
+  // zu Beginn: ein großer Knopf über die ganze Breite, beide Blöcke zu, nichts gespeichert
+  await expect(more).toBeVisible();
+  await expect(more).toHaveText(deText('btnMore'));
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(chart).toBeHidden();
+  await expect(air).toBeHidden();
+  expect(await storedMore(page), 'zu Beginn kein hw:more').toBeNull();
+  const box = await more.boundingBox();
+  const column = await page.locator('#now').boundingBox();
+  expect(box.height, 'Knopf mindestens 56 px hoch').toBeGreaterThanOrEqual(56);
+  expect(Math.abs(box.width - column.width), 'Knopf in voller Breite des Inhalts').toBeLessThanOrEqual(1);
+
+  // Klick: Kurve (Gerüst) und Lüften sind da, der Knopf heißt „Weniger anzeigen“, der Fokus bleibt auf ihm
+  await more.click();
+  await expect(more).toHaveText(deText('btnLess'));
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await expect(chart).toBeVisible();
+  await expect(air).toBeVisible();
+  await expect(page.locator('#chart h2')).toHaveText(deText('chartTitle'));
+  await expect(page.locator('#chartSvg')).toHaveAttribute('role', 'img');
+  await expect(page.locator('#air h2')).toHaveText(deText('airTitle'));
+  expect(await storedMore(page)).toBe('true');
+  await expectFocusOnMore(page);
+
+  // Lüften: die Fenster als Sätze, genau eines mit „Bestes Fenster“ im Text, darunter der Erklärsatz
+  const slots = page.locator('#airList li');
+  await expect(slots).toHaveCount(4);
+  for (const text of await slots.locator('.air-text').allTextContents()) { expect(text).toMatch(deRx('airSlot')); }
+  await expect(page.locator('#airList li.best')).toHaveCount(1);
+  await expect(page.locator('#airList li.best .air-tag')).toHaveText(deText('airBest'));
+  await expect(page.locator('#airList .air-tag')).toHaveCount(1);
+  await expect(page.locator('#airNone')).toBeHidden();
+  await expect(page.locator('#airNote')).toHaveText(deRx('airNote'));
+
+  // Offen bleibt die Seite bedienbar: Tippflächen, Scrollleiste, Überschriften
+  await expectTapSizes(page, 'Hauptbildschirm mit Mehr anzeigen');
+  await expectNoHorizontalScroll(page, 'Hauptbildschirm mit Mehr anzeigen');
+  await expectHeadingOrder(page, 'Hauptbildschirm mit Mehr anzeigen');
+
+  // Neuladen: bleibt offen (hw:more), auch der Knopf trägt den Zustand
+  await page.reload();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  await expect(more).toHaveText(deText('btnLess'));
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await expect(chart).toBeVisible();
+  await expect(air).toBeVisible();
+  await expect(slots).toHaveCount(4);
+
+  // Ein Abruf im Hintergrund zeichnet neu, ohne den Zustand anzutasten
+  await page.clock.fastForward(61000);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect.poll(() => net.count('forecast')).toBeGreaterThanOrEqual(2);
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await expect(chart).toBeVisible();
+
+  // „Weniger anzeigen“ mit der Tastatur: beide Blöcke zu, der Schlüssel weg, der Fokus bleibt
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(more).toHaveText(deText('btnMore'));
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(chart).toBeHidden();
+  await expect(air).toBeHidden();
+  expect(await storedMore(page), 'hw:more fehlt nach „Weniger anzeigen“').toBeNull();
+  await expectFocusOnMore(page);
+
+  // Neuladen: bleibt zu
+  await page.reload();
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  await expect(more).toHaveText(deText('btnMore'));
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(chart).toBeHidden();
+  await expect(air).toBeHidden();
+  expect(await storedMore(page)).toBeNull();
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+test('Fall 11: ist die Außenluft zu feucht, steht airNone statt der Fenster; der Erklärsatz bleibt', async ({ page }) => {
+  const net = await mockNet(page);
+  const om = JSON.parse(fixtureText('om-lueften.json'));
+  om.hourly.dew_point_2m = om.hourly.dew_point_2m.map((x) => x + 20);
+  net.on.forecast = (route) => answer(route, om);
+  await startClock(page);
+  await setUpByClicks(page);
+
+  await page.locator('#more').click();
+  await expect(page.locator('#air')).toBeVisible();
+  await expect(page.locator('#airList li')).toHaveCount(0);
+  await expect(page.locator('#airNone')).toHaveText(deText('airNone'));
+  await expect(page.locator('#airNote')).toHaveText(deRx('airNote'));
+  await expectFocusOnMore(page);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });
 
 // ---------------------------------------------------------------------------------------------

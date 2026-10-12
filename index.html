@@ -221,6 +221,23 @@
         <h2 id="planHead"></h2>
         <ul class="plan" id="planList"></ul>
       </section>
+
+      <button type="button" class="more-btn" id="more" aria-expanded="false" aria-controls="chart air" data-i18n="btnMore" hidden></button>
+
+      <section class="chart-box" id="chart" hidden>
+        <h2 data-i18n="chartTitle"></h2>
+        <div class="chart-legend" id="chartLegend"></div>
+        <svg class="chart-svg" id="chartSvg" role="img"></svg>
+        <p class="chart-summary" id="chartSummary"></p>
+      </section>
+
+      <section class="air-box" id="air" hidden>
+        <h2 data-i18n="airTitle"></h2>
+        <p class="hint" data-i18n="airLabel"></p>
+        <ul class="air-list" id="airList"></ul>
+        <p id="airNone" hidden></p>
+        <p class="hint" id="airNote"></p>
+      </section>
     </section>
 
     <section class="screen" id="s-settings" hidden>

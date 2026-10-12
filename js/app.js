@@ -6,7 +6,8 @@
  * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Bis zu
  * fünf Orte: Umschalter im Kopf, Radio je Ort in den Einstellungen, „Ort hinzufügen“ als Nachtrag ab S2. Dazu die
  * Schwellen für Fortgeschrittene und die Theme-Wahl System/Hell/Dunkel (boot.js setzt sie vor dem ersten Paint).
- * Sprache und die Kurve kommen in den nächsten Schritten dazu.
+ * Der Knopf „Mehr anzeigen“ (Blöcke 8 bis 10) klappt Kurve und Lüften auf; die Lüftungsfenster stehen schon, die
+ * Kurve ist bis jetzt nur ein Gerüst. Sprache und das Zeichnen der Kurve kommen in den nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
  * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
@@ -94,6 +95,8 @@
     problems: [],
     // true, wenn hw:v neuer ist als diese Fassung: dann bleibt der Speicher unangetastet (storeNewer)
     newer: false,
+    // „Mehr anzeigen“ ist offen (hw:more); gilt für alle Orte, nicht je Ort
+    more: false,
     screen: null,
     // Einrichtung: { step, fields: { street, zip, city }, hits, chosen, elev, … } oder null
     setup: null
@@ -1770,6 +1773,104 @@
     $('planHead').textContent = list.firstChild ? planHeading(state.place) : '';
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Mehr anzeigen (Abschnitt 8, Blöcke 8 bis 10): Kurve und Lüften liegen hinter einem großen Knopf (Entscheidung 9)
+  // ---------------------------------------------------------------------------------------------
+
+  // Die Lüftungsfenster von heute als fertiger Text: { slots: [{ best, tag, text }], none, note }. Rein: kein DOM,
+  // keine Module, keine Gerätezeit. model ist das Wettermodell (weather.model), place der Ort (Heizart und
+  // Wunschtemperatur stehen in place.heat); alles, was von Sprache und Ortszeit abhängt, bringt fmt mit:
+  //   fmt.t(key, vars)                    Text zum Schlüssel
+  //   fmt.now                             Jetzt in der Ortszeit des Orts ({ key, h, min, ms } aus weather.localNow)
+  //   fmt.airSlots(model, now, profile)   heat.airSlots
+  //   fmt.time(ms)                        Uhrzeit in der Ortszeit des Orts
+  //   fmt.deg(x, digits)                  Grad mit „°“
+  //   fmt.num(x)                          Zahl mit höchstens einer Nachkommastelle
+  // slots: je Fenster ein Satz (airSlot{time}) in zeitlicher Reihenfolge; das beste trägt tag = airBest, die übrigen ''.
+  // none: airNone, wenn heute kein Fenster mehr bleibt, sonst ''. note: airNote mit dem Taupunkt der Raumluft und der
+  // Raumtemperatur. Fehlt das Modell oder liegt heute nicht darin (zu alte Daten), ist alles leer: „Heute kein gutes
+  // Fenster mehr“ wäre dann eine Aussage ohne Grundlage.
+  function airRows(model, place, fmt) {
+    const rows = { slots: [], none: '', note: '' };
+    if (!model || !Array.isArray(model.days) || !fmt.now) { return rows; }
+    if (!model.days.some((d) => d.key === fmt.now.key)) { return rows; }
+    const profile = place && place.heat && typeof place.heat === 'object' ? place.heat : {};
+    const air = fmt.airSlots(model, fmt.now, profile);
+    for (const slot of air.slots) {
+      rows.slots.push({
+        best: !!slot.best,
+        tag: slot.best ? fmt.t('airBest') : '',
+        text: fmt.t('airSlot', { time: fmt.time(slot.ms) })
+      });
+    }
+    if (!rows.slots.length) { rows.none = fmt.t('airNone'); }
+    const comfort = isNum(profile.comfort) ? profile.comfort : DEFAULT_COMFORT;
+    rows.note = fmt.t('airNote', { dew: fmt.deg(air.indoorDew, 1), comfort: fmt.num(comfort) });
+    return rows;
+  }
+
+  // Die Formatierer für airRows aus dem Stand der Seite: Sprache aus i18n, Ortszeit des Orts (view.m.tz)
+  function airFmt(view) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    return {
+      t,
+      now: view.now,
+      airSlots: (model, now, profile) => heat.airSlots(model, now, profile),
+      time: (ms) => f.time(ms, tz),
+      deg: (x, digits) => f.deg(x, digits),
+      num: numAuto
+    };
+  }
+
+  // Ein Fenster: das beste trägt sein Wort („Bestes Fenster“) im Rahmen, nie nur Farbe oder Fettdruck
+  function airItem(row) {
+    const li = make('li', row.best ? 'air-slot best' : 'air-slot');
+    if (row.tag) { li.appendChild(make('span', 'air-tag', row.tag)); }
+    li.appendChild(make('span', 'air-text', row.text));
+    return li;
+  }
+
+  // Lüften gegen Schimmel: nur gerechnet und gezeichnet, solange „Mehr anzeigen“ offen ist. Ohne Fenster und ohne
+  // Satz (zu alte Daten) entfällt der Block ganz.
+  function renderAir(view) {
+    const list = $('airList');
+    list.replaceChildren();
+    const rows = airRows(view.m, state.place, airFmt(view));
+    for (const row of rows.slots) { list.appendChild(airItem(row)); }
+    setLine('airNone', rows.none);
+    setLine('airNote', rows.note);
+    $('air').hidden = !(rows.slots.length || rows.none);
+  }
+
+  // „Mehr anzeigen“ / „Weniger anzeigen“: der Knopf bleibt derselbe, nur Beschriftung und aria-expanded wechseln (und
+  // nur, wenn sich etwas ändert, damit ein Neuzeichnen beim Abruf nichts erneut vorliest). Ohne Daten gibt es nichts
+  // aufzuklappen: Knopf und beide Blöcke entfallen, hw:more bleibt davon unberührt.
+  function renderMore(view) {
+    const btn = $('more');
+    const open = state.more && !!view;
+    const label = t(state.more ? 'btnLess' : 'btnMore');
+    if (btn.textContent !== label) { btn.textContent = label; }
+    const expanded = state.more ? 'true' : 'false';
+    if (btn.getAttribute('aria-expanded') !== expanded) { btn.setAttribute('aria-expanded', expanded); }
+    btn.hidden = !view;
+    $('chart').hidden = !open;
+    if (open) {
+      guard(() => renderAir(view));
+    } else {
+      $('air').hidden = true;
+    }
+  }
+
+  // Der Klick: hw:more = true bleibt beim nächsten Start offen, „Weniger anzeigen“ löscht den Schlüssel (Entscheidung 9).
+  // Der Fokus bleibt in beiden Richtungen auf dem Knopf (Disclosure-Muster; Safari fokussiert einen Knopf beim Klick nicht).
+  function onMore() {
+    state.more = !state.more;
+    if (state.more) { persist('more', true); } else { forget('more'); }
+    renderMore(guard(buildView));
+    $('more').focus();
+  }
+
   // Zeichnet den Hauptbildschirm neu, Block für Block; scheitert einer, laufen die übrigen weiter
   // Farbskala unter der Kurve (#scale): der Verlauf folgt dem Schema. Das Element gehört zur Kurve, die ein späterer
   // Schritt baut; solange es in index.html fehlt, tut die Funktion nichts. Deshalb document.getElementById statt $():
@@ -1791,6 +1892,7 @@
     guard(() => renderAlerts(view));
     guard(() => renderDays(view));
     guard(() => renderPlan(view));
+    guard(() => renderMore(view));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2391,6 +2493,7 @@
 
     // „Neu laden“ ruft immer ab und hängt sich an einen laufenden Abruf an (refresh(true))
     on('reload', 'click', () => { refresh(true); });
+    on('more', 'click', onMore);
     on('settingsBtn', 'click', onSettingsOpen);
     on('btnAddPlace', 'click', onAddPlace);
     on('btnSettingsBack', 'click', onSettingsBack);
@@ -2442,6 +2545,7 @@
     i18n.apply(i18n.detect());
     state.newer = storage.get('v', 2) > 2;
     loadPlaces();
+    state.more = storage.get('more', false) === true;
     loadCache();
     bindEvents();
     i18n.onApply(onLanguage);
@@ -2479,11 +2583,12 @@
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
   // Einstellungen (STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch,
   // afterDelete, cleanLabel), die Ortsliste
-  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher) und das Theme (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
+  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher), die Lüftungsfenster (airRows) und das Theme
+  // (THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme). Im Browser gibt es kein module, app.js
   // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+      verdictLines, planRows, airRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
       MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
     };

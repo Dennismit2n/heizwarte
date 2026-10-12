@@ -276,14 +276,15 @@ test('app.js: jede ID, die der Code anfasst, steht im Markup', () => {
 test('app.js: jeder Schlüssel, den der Code als Zeichenkette nennt, steht in de', () => {
   const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
   const keys = new Set();
-  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now|level|alert|day|reason|charge|plan|strength)[A-Z]\w*)'/g;
+  const re = /'((?:err|setup|btn|hit|profile|status|store|storage|now|level|alert|day|reason|charge|plan|strength|air|chart)[A-Z]\w*)'/g;
   let m;
   while ((m = re.exec(code)) !== null) { keys.add(m[1]); }
   for (const k of ['setupSearching', 'setupSearch', 'setupByLocation', 'setupConfirmYes', 'errNeedPlace', 'errNoHit', 'errElevRange', 'hitHouse',
     'levelTitle0', 'levelText0', 'levelOf', 'levelNoData', 'chargeTonight', 'chargeHigh', 'planNow', 'planToday', 'planDay',
     'reasonNightMin', 'alertFrom', 'alertUntil', 'dayToday', 'dayColder', 'daySame', 'nowFeels', 'nowNightMin',
     'planFor', 'planTitle', 'planTitleStorage', 'planNightOf', 'planStart', 'planDue', 'planOptional', 'planDisagree', 'planGusty',
-    'planNightMin', 'planLead', 'planChargeEvening', 'strengthThrough', 'strengthLow', 'profileRadiator', 'profileStorage']) {
+    'planNightMin', 'planLead', 'planChargeEvening', 'strengthThrough', 'strengthLow', 'profileRadiator', 'profileStorage',
+    'btnMore', 'btnLess', 'airBest', 'airSlot', 'airNone', 'airNote']) {
     assert.ok(keys.has(k), 'Prüfer erkennt ' + k + ' nicht');
   }
   // Namen wie 'btnSearch' sind Element-IDs und stehen im Markup; alles andere muss ein Schlüssel sein
@@ -316,7 +317,7 @@ test('Heizart-Karten nennen Namen und Laiensatz aus den profile*-Schlüsseln', (
 // ---------------------------------------------------------------------------------------------
 
 test('Hauptbildschirm: Blöcke in der Reihenfolge des Plans, Screenreader-Reihenfolge = DOM-Reihenfolge', () => {
-  const folge = ['placeName', 'placePick', 'reload', 'settingsBtn', 'heatHint', 'status', 'now', 'verdict', 'alerts', 'days', 'plan'];
+  const folge = ['placeName', 'placePick', 'reload', 'settingsBtn', 'heatHint', 'status', 'now', 'verdict', 'alerts', 'days', 'plan', 'more', 'chart', 'air'];
   const slice = screenSlice('s-main');
   let letzte = -1;
   for (const id of folge) {
@@ -326,7 +327,7 @@ test('Hauptbildschirm: Blöcke in der Reihenfolge des Plans, Screenreader-Reihen
   }
   // Überschriften des Hauptbildschirms: h2 je Block, keine Stufe übersprungen (die h3 der Karten entstehen in app.js)
   const ebenen = tags(slice).filter((tg) => /^h[1-6]$/.test(tg.name));
-  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h2', 'h2', 'h2', 'h2']);
+  assert.deepEqual(ebenen.map((tg) => tg.name), ['h2', 'h2', 'h2', 'h2', 'h2', 'h2', 'h2']);
   assert.equal(ebenen[0].attrs.tabindex, '-1');
   assert.equal(byId.get('verdictTitle').name, 'h2');
 });
@@ -466,6 +467,87 @@ test('Fahrplan: CSS-Karte je Nacht, Hinweis im Rahmen statt nur in Farbe', () =>
   assert.match(css, /\.plan-item\s*\{[^}]*background: var\(--surface\);/);
   assert.match(css, /\.plan-tag\s*\{[^}]*border: 2px solid var\(--edge\);/);
   assert.match(css, /\.plan-when\s*\{[^}]*font-size: 1\.375rem;/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Mehr anzeigen: Kurve (Gerüst) und Lüften (BAUPLAN Abschnitt 8, Blöcke 8 bis 10)
+// ---------------------------------------------------------------------------------------------
+
+test('Mehr anzeigen: ein Knopf mit aria-expanded, danach Kurve und Lüften, alles zu Beginn verborgen', () => {
+  const more = byId.get('more');
+  assert.equal(more.name, 'button');
+  assert.equal(more.attrs.type, 'button');
+  assert.equal(more.attrs['aria-expanded'], 'false');
+  assert.equal(more.attrs['aria-controls'], 'chart air');
+  assert.equal(more.attrs['data-i18n'], 'btnMore');
+  assert.equal(more.attrs.disabled, undefined, 'nie disabled');
+  assert.equal(more.attrs.hidden, '', 'ohne Daten gibt es nichts aufzuklappen');
+  for (const id of ['chart', 'air']) {
+    assert.equal(byId.get(id).name, 'section', id);
+    assert.equal(byId.get(id).attrs.hidden, '', id + ' ist zu Beginn verborgen');
+  }
+  const slice = screenSlice('s-main');
+  assert.ok(slice.indexOf('id="plan"') < slice.indexOf('id="more"'), 'Knopf nach dem Fahrplan');
+  assert.ok(slice.indexOf('id="more"') < slice.indexOf('id="chart"'), 'Kurve nach dem Knopf');
+  assert.ok(slice.indexOf('id="chart"') < slice.indexOf('id="air"'), 'Lüften nach der Kurve');
+});
+
+test('Mehr anzeigen: die Kurve ist ein Gerüst mit Überschrift, Legende, Bild mit Rolle und Zusammenfassung', () => {
+  const slice = screenSlice('s-main');
+  const chart = slice.slice(slice.indexOf('id="chart"'), slice.indexOf('id="air"'));
+  const inner = tags(chart);
+  const h2 = inner.find((tg) => tg.name === 'h2');
+  assert.ok(h2 && h2.attrs['data-i18n'] === 'chartTitle', 'Überschrift chartTitle');
+  assert.equal(byId.get('chartLegend').name, 'div');
+  const svg = byId.get('chartSvg');
+  assert.equal(svg.name, 'svg');
+  assert.equal(svg.attrs.role, 'img');
+  assert.equal(byId.get('chartSummary').name, 'p');
+  assert.ok(chart.indexOf('id="chartLegend"') < chart.indexOf('id="chartSvg"') && chart.indexOf('id="chartSvg"') < chart.indexOf('id="chartSummary"'));
+  // Gezeichnet wird zur Laufzeit (nächster Schritt): im Markup bleibt das Bild leer
+  assert.match(chart, /<svg[^>]*><\/svg>/);
+});
+
+test('Mehr anzeigen: Lüften hat Überschrift, Beschriftung, Liste, „kein Fenster“ und den Erklärsatz; kein aria-live', () => {
+  const slice = screenSlice('s-main');
+  const air = slice.slice(slice.indexOf('id="air"'));
+  const inner = tags(air);
+  assert.deepEqual(inner.filter((tg) => tg.name === 'h2').map((tg) => tg.attrs['data-i18n']), ['airTitle']);
+  assert.ok(inner.some((tg) => tg.attrs['data-i18n'] === 'airLabel'), 'airLabel');
+  assert.equal(byId.get('airList').name, 'ul');
+  assert.equal(byId.get('airNone').attrs.hidden, '');
+  assert.equal(byId.get('airNote').name, 'p');
+  assert.ok(air.indexOf('id="airList"') < air.indexOf('id="airNone"') && air.indexOf('id="airNone"') < air.indexOf('id="airNote"'));
+  assert.ok(inner.every((tg) => tg.attrs['aria-live'] === undefined), 'nur die Statuszeile ist aria-live');
+});
+
+test('Mehr anzeigen: app.js verdrahtet Klick, hw:more, Beschriftung und Fokus; Lüften wird nur bei offenem Block gerechnet', () => {
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\'"`])\/\/[^\n]*/g, '$1');
+  assert.match(code, /on\('more', 'click', onMore\);/);
+  const onMore = code.slice(code.indexOf('function onMore()'));
+  const body = onMore.slice(0, onMore.indexOf('\n  }\n'));
+  assert.match(body, /state\.more = !state\.more;/);
+  assert.match(body, /persist\('more', true\)/);
+  assert.match(body, /forget\('more'\)/);
+  assert.match(body, /\$\('more'\)\.focus\(\)/, 'der Fokus bleibt auf dem Knopf');
+  assert.match(code, /state\.more = storage\.get\('more', false\) === true;/);
+  assert.match(code, /t\(state\.more \? 'btnLess' : 'btnMore'\)/);
+  assert.match(code, /setAttribute\('aria-expanded', expanded\)/);
+  // airRows wird nur von renderAir gerufen, und renderAir nur in renderMore und nur im Zweig „offen“
+  assert.equal((code.match(/airRows\(/g) || []).length, 2, 'Definition und ein Aufruf');
+  assert.equal((code.match(/renderAir\(/g) || []).length, 2, 'Definition und ein Aufruf, im guard von renderMore');
+  assert.match(code, /if \(open\) \{\s*guard\(\(\) => renderAir\(view\)\);\s*\} else \{\s*\$\('air'\)\.hidden = true;/);
+  // render() zeichnet den Knopf mit; Sprachwechsel läuft über render() (onLanguage)
+  assert.match(code, /guard\(\(\) => renderMore\(view\)\);/);
+});
+
+test('Mehr anzeigen: Schlüssel in de, CSS mit 56-px-Knopf über die ganze Breite und Rahmen für das beste Fenster', () => {
+  for (const k of ['btnMore', 'btnLess', 'chartTitle', 'airTitle', 'airLabel', 'airNone', 'airNote', 'airBest', 'airSlot']) {
+    assert.ok(has(de, k), k + ' fehlt in de');
+  }
+  assert.match(css, /\.more-btn\s*\{[^}]*width: 100%;[^}]*min-height: 56px;/);
+  assert.match(css, /\.air-tag\s*\{[^}]*border: 2px solid var\(--edge\);/);
+  assert.match(css, /\.air-list\s*\{[^}]*list-style: none;/);
 });
 
 test('Einstellungen: der Weg zurück ist da, kein Bildschirm ohne Ausgang', () => {

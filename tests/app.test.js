@@ -14,6 +14,8 @@
  * die Höhenregel (Zahl von Hand, leer automatisch, ungültig nichts), Löschen mit Nachrücken und der Ortsname.
  * Zuletzt die Regeln der Ortsliste (BAUPLAN Abschnitt 4, 6 und 8): höchstens fünf Orte, der aktive Ort, wenn
  * hw:active fehlt oder ins Leere zeigt, und wann der Umschalter im Kopf steht.
+ * Ganz am Ende airRows (BAUPLAN Abschnitt 8, Block 10): die Lüftungsfenster hinter „Mehr anzeigen“ als Sätze, das beste
+ * mit airBest, airNone ohne Fenster, der Erklärsatz mit Raumtaupunkt und Wunschtemperatur, leer ohne Modell.
  */
 'use strict';
 
@@ -24,7 +26,7 @@ const path = require('node:path');
 
 const Heizwarte = require('./_load.js');
 const {
-  verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
+  verdictLines, planRows, airRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
   STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
   MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
 } = require('../js/app.js');
@@ -1237,4 +1239,116 @@ test('showsSwitcher: ein Ort zeigt nur den Namen, ab zwei Orten steht der Umscha
   assert.equal(showsSwitcher(orte(2)), true);
   assert.equal(showsSwitcher(orte(5)), true);
   assert.equal(showsSwitcher(null), false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// airRows: die Lüftungsfenster hinter „Mehr anzeigen“ (BAUPLAN Abschnitt 8, Block 10)
+// ---------------------------------------------------------------------------------------------
+
+// Formatierer für airRows: echter Text aus i18n, Ortszeit des Orts, heat.airSlots durchgereicht. calls hält die
+// Aufrufe von airSlots mit, damit zu sehen ist, was airRows hineinsteckt (und dass es bei leerem Modell nie gerufen wird).
+function airFmtFor(view, over) {
+  const f = i18n.fmt;
+  const tz = view.m.tz;
+  const calls = [];
+  const fmt = {
+    t: i18n.t,
+    now: view.now,
+    airSlots: (model, now, profile) => { calls.push({ model, now, profile }); return heat.airSlots(model, now, profile); },
+    time: (ms) => f.time(ms, tz),
+    deg: (x, digits) => f.deg(x, digits),
+    num: roundedNum
+  };
+  return { fmt: Object.assign(fmt, over || {}), calls };
+}
+
+test('airRows: vier Fenster in zeitlicher Reihenfolge, genau eines trägt airBest, der Satz nennt nur die Uhrzeit', () => {
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const { fmt } = airFmtFor(view);
+  const rows = airRows(view.m, placeOf(PROF.floorScreed), fmt);
+  assert.deepEqual(rows.slots.map((s) => s.text), [
+    'Gegen 10:00 Uhr lüften.', 'Gegen 11:00 Uhr lüften.', 'Gegen 12:00 Uhr lüften.', 'Gegen 13:00 Uhr lüften.'
+  ]);
+  assert.deepEqual(rows.slots.map((s) => s.best), [false, false, false, true]);
+  assert.deepEqual(rows.slots.map((s) => s.tag), ['', '', '', 'Bestes Fenster']);
+  assert.equal(rows.none, '', 'mit Fenstern entfällt airNone');
+});
+
+test('airRows: der Erklärsatz nennt den Taupunkt der Raumluft und die Wunschtemperatur des Orts', () => {
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const rows = airRows(view.m, placeOf(PROF.floorScreed), airFmtFor(view).fmt);
+  assert.equal(rows.note, 'Draußen ist die Luft trockener als drinnen, wenn ihr Taupunkt unter etwa 10,7° liegt ' +
+    '(Raum 20 °C bei 55 % Luftfeuchte). Dann trägt jedes Lüften Feuchtigkeit hinaus.');
+  // ein kühleres Zimmer hat den niedrigeren Raumtaupunkt, und eine halbe Zahl steht mit Komma da
+  const kuehl = airRows(view.m, placeOf(Object.assign({}, PROF.floorScreed, { comfort: 17 })), airFmtFor(view).fmt);
+  assert.ok(kuehl.note.includes(i18n.fmt.deg(heat.dewPoint(17, 55), 1)), kuehl.note);
+  assert.ok(kuehl.note.includes('Raum 17 °C'), kuehl.note);
+  const halb = airRows(view.m, placeOf(Object.assign({}, PROF.floorScreed, { comfort: 20.5 })), airFmtFor(view).fmt);
+  assert.ok(halb.note.includes('Raum 20,5 °C'), halb.note);
+});
+
+test('airRows: zu feuchte Außenluft ergibt kein Fenster, dafür airNone; der Erklärsatz bleibt', () => {
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const nass = clone(view.m);
+  nass.hours.forEach((o) => { o.dew += 20; });
+  const rows = airRows(nass, placeOf(PROF.floorScreed), airFmtFor(view).fmt);
+  assert.deepEqual(rows.slots, []);
+  assert.equal(rows.none, 'Heute kein gutes Fenster mehr. Kurz querlüften reicht.');
+  assert.ok(rows.note.startsWith('Draußen ist die Luft trockener'), rows.note);
+});
+
+test('airRows: heat.airSlots bekommt Modell, Jetzt und das Heizprofil des Orts; ohne Profil gilt 20 °C', () => {
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const place = placeOf(PROF.radiator);
+  const { fmt, calls } = airFmtFor(view);
+  airRows(view.m, place, fmt);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, view.m);
+  assert.equal(calls[0].now, view.now);
+  assert.equal(calls[0].profile, place.heat);
+  // ein Ort ohne Heizprofil und eins ohne Wunschtemperatur: der Rückfall ist die Wunschtemperatur 20 °C
+  for (const ort of [{ id: 'x', label: 'Opa', cc: 'DE' }, placeOf({ type: 'radiator' }), null]) {
+    const rows = airRows(view.m, ort, airFmtFor(view).fmt);
+    assert.ok(rows.note.includes('Raum 20 °C'), JSON.stringify(ort) + ': ' + rows.note);
+    assert.ok(rows.note.includes('10,7°'), rows.note);
+    assert.equal(rows.slots.length, 4);
+  }
+});
+
+test('airRows: ohne Modell, ohne Jetzt und ohne heute im Modell ist alles leer, nie „kein gutes Fenster“', () => {
+  const leer = { slots: [], none: '', note: '' };
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const { fmt, calls } = airFmtFor(view);
+  assert.deepEqual(airRows(null, placeOf(PROF.floorScreed), fmt), leer);
+  assert.deepEqual(airRows(view.m, placeOf(PROF.floorScreed), Object.assign({}, fmt, { now: null })), leer);
+  // zu alte Daten: heute liegt nicht im Modell (derselbe Fall wie bei den Tageskarten)
+  const alt = viewAt('om-stale.json', Date.UTC(2026, 9, 14, 6, 0));
+  assert.equal(alt.todayIdx, -1, 'der Fall setzt voraus, dass heute fehlt');
+  assert.deepEqual(airRows(alt.m, placeOf(PROF.floorScreed), airFmtFor(alt).fmt), leer);
+  assert.equal(calls.length, 0, 'airSlots wird bei leerem Modell nicht gerufen');
+});
+
+test('airRows: die Uhrzeit steht in der Ortszeit des Orts (Lissabon), nicht in der Berlins', () => {
+  // Dienstag, 13.01.2026, 10:00 in Lissabon (UTC+0) = 11:00 in Berlin
+  const view = viewAt('om-lissabon.json', Date.UTC(2026, 0, 13, 10, 0));
+  assert.equal(view.m.tz, 'Europe/Lisbon');
+  // die Fixture ist feucht: trockene Außenluft einsetzen, damit es Fenster gibt
+  view.m = clone(view.m);
+  view.m.hours.forEach((o) => { o.dew = 0; });
+  const rows = airRows(view.m, placeOf(PROF.floorScreed), airFmtFor(view).fmt);
+  const slots = heat.airSlots(view.m, view.now, PROF.floorScreed).slots;
+  assert.ok(slots.length > 0, 'der Fall braucht mindestens ein Fenster');
+  assert.deepEqual(rows.slots.map((s) => s.text), slots.map((s) => i18n.t('airSlot', { time: i18n.fmt.time(s.ms, 'Europe/Lisbon') })));
+  const berlin = slots.map((s) => i18n.t('airSlot', { time: i18n.fmt.time(s.ms, 'Europe/Berlin') }));
+  assert.notDeepEqual(rows.slots.map((s) => s.text), berlin, 'eine Stunde Unterschied zu Berlin');
+});
+
+test('airRows: rein, ändert weder Modell noch Ort und liefert bei gleicher Eingabe dasselbe', () => {
+  const view = viewAt('om-lueften.json', JAN13_MS);
+  const place = placeOf(PROF.floorScreed);
+  const vorher = JSON.stringify([view.m, place, view.now]);
+  const a = airRows(view.m, place, airFmtFor(view).fmt);
+  const b = airRows(view.m, place, airFmtFor(view).fmt);
+  assert.deepEqual(a, b);
+  assert.equal(JSON.stringify([view.m, place, view.now]), vorher);
 });
