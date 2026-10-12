@@ -34,7 +34,7 @@ const SCHLUESSEL = {
   'Jetzt, Tage': 'nowTitle nowFeels{t} nowWind{kmh} nowHumidity{p} nowNightMin{t,time} daysTitle dayToday dayTomorrow dayMin{t} dayMax{t} dayRain{mm} daySun{h} dayGust{kmh} dayColder{k} dayWarmer{k} daySame',
   'Kurve, Lüften': 'chartTitle chartLegendIcon chartLegendMos{station,height} chartLegendRain chartNow chartSummary{min,minWhen,max,maxWhen} chartMosFar airTitle airLabel airNone airNote{dew,comfort} airBest airSlot{time}',
   Warnungen: 'alertTitle alertLangHint alertFrom{when} alertUntil{when} alertUnavailable alertSource',
-  Einstellungen: 'settingsTitle settingsPlaces settingsPlaceActive settingsHeat settingsComfort settingsLeadMin settingsLeadMax settingsElev settingsAdvanced settingsThresholdsHint threshWarnMinN threshWarnDrop48 threshAlarmMinN threshAlarmDrop48 threshAlarmGtRise threshCritMinN threshColdWind threshGustLead settingsReset settingsDeleteConfirm{name} settingsDeleteLast{name} stepDown{what} stepUp{what} unitHours{n} unitCelsius{n} unitKmh{n} unitKd{n} themeLabel themeSystem themeLight themeDark langLabel',
+  Einstellungen: 'settingsTitle settingsPlaces settingsPlaceActive settingsHeat settingsComfort settingsLeadMin settingsLeadMax settingsElev settingsAdvanced settingsThresholdsHint threshWarnMinN threshWarnDrop48 threshAlarmMinN threshAlarmDrop48 threshAlarmGtRise threshCritMinN threshColdWind threshGustLead threshNameWarnMinN threshNameWarnDrop48 threshNameAlarmMinN threshNameAlarmDrop48 threshNameAlarmGtRise threshNameCritMinN threshNameColdWind threshNameGustLead settingsReset settingsDeleteConfirm{name} settingsDeleteLast{name} stepDown{what} stepUp{what} unitHours{n} unitCelsius{n} unitKmh{n} unitDegrees{n} themeLabel themeSystem themeLight themeDark langLabel',
   Fußzeile: 'footerWeather footerDwd footerAmpel footerVdi footerElev footerGeo footerFont footerCode footerPrivacy footerOffline footerExternal',
   'Wetter-Codes': 'wmo0 wmo1 wmo2 wmo3 wmo45 wmo48 wmo51 wmo53 wmo55 wmo56 wmo57 wmo61 wmo63 wmo65 wmo66 wmo67 wmo71 wmo73 wmo75 wmo77 wmo80 wmo81 wmo82 wmo85 wmo86 wmo95 wmo96 wmo99'
 };
@@ -109,7 +109,7 @@ test('Stufe M1: I18N enthält genau den Block de, LANGS die 14 Sprachen der Star
 test('Block de hat genau die Schlüssel der Tabelle im Plan, nicht mehr und nicht weniger', () => {
   const vorhanden = Object.keys(de).filter((k) => k !== '_name').sort();
   const soll = Object.keys(ERWARTET).sort();
-  assert.equal(soll.length, 245);
+  assert.equal(soll.length, 253);
   assert.deepEqual(soll.filter((k) => !vorhanden.includes(k)), [], 'fehlt in de');
   assert.deepEqual(vorhanden.filter((k) => !soll.includes(k)), [], 'steht in de, aber nicht in der Tabelle');
 });

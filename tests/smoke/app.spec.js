@@ -12,7 +12,8 @@
  * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen, Schwellen
  * „Für Fortgeschrittene“), Fall 14 (Stufenzeile als Text) und Fall 17 (mehrere Orte: Nachtrag, Umschalter, Wechsel
  * während eines Abrufs, Maximum fünf) stehen schon.
- * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5.
+ * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5. Fall 3 läuft
+ * zusätzlich mit drei Orten, zwei davon mit 40 Zeichen langen Namen (Umschalter im Kopf, Ortsliste, Rückfrage).
  */
 'use strict';
 
@@ -261,10 +262,15 @@ async function expectTapSizes(page, where) {
   expect(bad, 'Tippflächen: ' + where).toEqual([]);
 }
 
-// Fall 3: keine horizontale Scrollleiste
+// Fall 3: keine horizontale Scrollleiste. Im Projekt phone (isMobile) weitet Chromium das Layout-Viewport auf zu
+// breiten Inhalt aus: innerWidth wächst dann mit (gemessen: 413 statt 360 px bei einem Ortsnamen mit 40 Zeichen im
+// Umschalter), und scrollWidth ≤ innerWidth allein sähe nichts. Deshalb zusätzlich gegen die eingestellte Breite.
 async function expectNoHorizontalScroll(page, where) {
   const w = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
   expect(w.scroll, 'scrollWidth ≤ innerWidth: ' + where).toBeLessThanOrEqual(w.inner);
+  const set = page.viewportSize().width;
+  expect(w.inner, 'innerWidth ≤ eingestellte Breite ' + set + ' px: ' + where).toBeLessThanOrEqual(set);
+  expect(w.scroll, 'scrollWidth ≤ eingestellte Breite ' + set + ' px: ' + where).toBeLessThanOrEqual(set);
 }
 
 // Fall 5: genau ein h1, danach keine Stufe übersprungen, keine leere Überschrift
@@ -652,6 +658,46 @@ test('Fall 8: 429 vom Wetterdienst zeigt statusWaiting, nach 60 s kommen die Dat
   expect(net.count('forecast'), 'genau ein zweiter Versuch').toBe(2);
 });
 
+test('Fall 8: wer in der Wartezeit nach dem 429 den Ort wechselt und zurückkommt, sieht wieder statusWaiting mit der Restzeit', async ({ page }) => {
+  const net = await mockNet(page);
+  // Ort 1 (latitude=48.8) bekommt beim ersten Abruf 429, alle anderen Abrufe bekommen Daten
+  let refused = false;
+  net.on.forecast = (route) => {
+    if (!refused && route.request().url().includes('latitude=48.8&')) {
+      refused = true;
+      return answer(route, { error: true, reason: 'Minutely API request limit exceeded. Please try again in one minute.' }, 429);
+    }
+    return answer(route, fixtureText('om-frost.json'));
+  };
+  await seedPlaces(page, 2);
+  await startClock(page);
+  await page.goto('/');
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#status')).toContainText(deText('statusWaiting', { s: 60 }));
+
+  // 20 s später auf Ort 2 und gleich wieder zurück: der Abruf von Ort 1 wartet noch
+  await page.clock.fastForward(20000);
+  await page.locator('#placeSelect').selectOption('ort00001');
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  await page.locator('#placeSelect').selectOption('ort00000');
+  await expect.poll(() => storedActive(page)).toBe('ort00000');
+  await expect(page.locator('#status')).toContainText(deRx('statusWaiting'));
+  await expect(page.locator('#status')).not.toContainText(deText('statusWaiting', { s: 60 }));
+  await expect(page.locator('#status')).not.toContainText(deText('statusLoading'));
+  // die Zahl im Wartesatz (Satz 1 „Stand: …“ trägt selbst Ziffern)
+  const waitRx = new RegExp(escapeRx(deText('statusWaiting').split('{s}')[0]) + '(\\d+)');
+  const left = Number(waitRx.exec(await page.locator('#status').textContent())[1]);
+  expect(left, 'Restzeit in Sekunden').toBeGreaterThan(30);
+  expect(left).toBeLessThanOrEqual(40);
+
+  // nach der Wartezeit kommt der zweite Versuch, die Daten erscheinen unter Ort 1
+  await page.clock.fastForward(60000);
+  await expect(page.locator('#status')).toContainText(STAMP_WITH_TIME);
+  await expect(page.locator('#status')).not.toContainText(deRx('statusWaiting'));
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
 test('Fall 9: Offline-Stand aus dem Service-Worker-Cache, Selbstheilung nach fremder Löschung', async ({ page, context }) => {
   const net = await mockNet(page);
   await startClock(page);
@@ -785,12 +831,23 @@ test('Fall 12: Heizart ändert den Plan, Höhe löst einen neuen Abruf aus, „Z
   await expect(page.locator('#settingsElevAuto')).toBeHidden();
   await expect(page.locator('#nowTemp')).toContainText('°');
 
-  // Feld leeren: die Höhe wird neu abgefragt (elev.json = 417 m) und gilt wieder als automatisch
+  // Feld leeren: die Höhe wird neu abgefragt (elev.json = 417 m) und gilt wieder als automatisch. Solange die Antwort
+  // aussteht, sagt die Anzeige setupElevLoading (wie in S4); die Route hält die Antwort bis zur Prüfung zurück.
   const elevations = net.count('elevation');
   const forecasts2 = net.count('forecast');
+  let releaseElev = null;
+  const elevGate = new Promise((resolve) => { releaseElev = resolve; });
+  net.on.elevation = async (route) => {
+    await elevGate;
+    return answer(route, fixtureText('elev.json'));
+  };
   await page.locator('#settingsElevInput').fill('');
   await page.keyboard.press('Enter');
   await expect.poll(() => net.count('elevation')).toBe(elevations + 1);
+  await expect(page.locator('#settingsElevVal')).toHaveText(deText('setupElevLoading'));
+  await expect(page.locator('#settingsElevAuto')).toBeHidden();
+  expect(net.count('forecast'), 'vor der Antwort kein Abruf').toBe(forecasts2);
+  releaseElev();
   await expect.poll(() => net.count('forecast')).toBe(forecasts2 + 1);
   expect(net.log.forecast[net.log.forecast.length - 1]).toMatch(/[?&]elevation=417(&|$)/);
   expect((await storedPlaces(page))[0]).toMatchObject({ elev: 417, elevAuto: true });
@@ -941,6 +998,18 @@ test('Fall 12: Ortsliste mit Name, Radio und Löschen mit Rückfrage; der einzig
   await page.keyboard.press('Escape');
   await expect(ask).toBeHidden();
   await expect(del).toBeFocused();
+  // gehaltenes Enter auf „Löschen“: der erste Druck öffnet die Rückfrage, die Wiederholungen der Taste (repeat)
+  // landen auf der Frage und löschen nichts; erst ein neuer Druck wäre die zweite Entscheidung
+  await page.keyboard.down('Enter');
+  await expect(ask).toBeFocused();
+  await page.keyboard.down('Enter');
+  await page.keyboard.down('Enter');
+  await page.keyboard.up('Enter');
+  await expect(ask).toBeVisible();
+  expect(await storedPlaces(page)).toHaveLength(1);
+  await page.keyboard.press('Escape');
+  await expect(ask).toBeHidden();
+  await expect(del).toBeFocused();
 
   // bestätigen: der Ort und sein Cache sind weg, die Einrichtung beginnt bei S1 mit dem Fokus auf der Überschrift
   expect(await page.evaluate((id) => localStorage.getItem('hw:cache:' + id) !== null, place.id), 'Cache des Orts vorher da').toBe(true);
@@ -970,13 +1039,14 @@ test('Fall 12: Ortsliste mit Name, Radio und Löschen mit Rückfrage; der einzig
 // Fall 12 (Fortsetzung): „Für Fortgeschrittene“, die acht Ampelschwellen je Ort
 // ---------------------------------------------------------------------------------------------
 
-// Die Standardwerte der acht Schwellen als { Schlüssel: [Einheit, Zahl] }, so wie die Stepper sie zeigen
+// Die Standardwerte der acht Schwellen als { Schlüssel: [Einheit, Zahl] }, so wie die Stepper sie zeigen;
+// Temperaturen in °C, Veränderungen in „Grad“ (unitDegrees), Wind in km/h
 const SCHWELLEN_STANDARD = {
   threshWarnMinN: ['unitCelsius', '5'],
-  threshWarnDrop48: ['unitCelsius', '−4'],
+  threshWarnDrop48: ['unitDegrees', '−4'],
   threshAlarmMinN: ['unitCelsius', '0'],
-  threshAlarmDrop48: ['unitCelsius', '−6'],
-  threshAlarmGtRise: ['unitKd', '5'],
+  threshAlarmDrop48: ['unitDegrees', '−6'],
+  threshAlarmGtRise: ['unitDegrees', '5'],
   threshCritMinN: ['unitCelsius', '−5'],
   threshColdWind: ['unitKmh', '20'],
   threshGustLead: ['unitKmh', '40']
@@ -1009,10 +1079,15 @@ test('Fall 12: Schwellen für Fortgeschrittene sind zugeklappt, ein Stepper schr
   await expect(det).toHaveAttribute('open', '');
   await expect(det.locator('p.hint').first()).toHaveText(deText('settingsThresholdsHint'));
   await expectThreshDefaults(page);
+  // die Knöpfe nennen die Schwelle mit ihrem Hauptwort (threshName…), nicht mit dem Satzanfang der Beschriftung
   for (const k of Object.keys(SCHWELLEN_STANDARD)) {
-    await expect(page.locator('#' + k + 'Up')).toHaveAttribute('aria-label', deText('stepUp', { what: deText(k) }));
-    await expect(page.locator('#' + k + 'Down')).toHaveAttribute('aria-label', deText('stepDown', { what: deText(k) }));
+    const what = deText('threshName' + k.slice('thresh'.length));
+    await expect(page.locator('#' + k + 'Up')).toHaveAttribute('aria-label', deText('stepUp', { what }));
+    await expect(page.locator('#' + k + 'Down')).toHaveAttribute('aria-label', deText('stepDown', { what }));
   }
+  // die Frost-Schwellen enden bei 0 °C: alarmMinN steht mit der Faustregel schon am oberen Rand
+  await expect(page.locator('#threshAlarmMinNUp')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.locator('#threshCritMinNUp')).not.toHaveAttribute('aria-disabled', /.*/);
   await expect(page.locator('#btnThreshReset')).toHaveText(deText('settingsReset'));
   // aufgeklappt: Tippflächen, Scrollleiste und Überschriften wie auf jedem Bildschirm
   await expectTapSizes(page, 'Einstellungen mit Schwellen');
@@ -1305,15 +1380,17 @@ test('Fall 17: Wechsel während eines Abrufs zeigt nie die Daten des alten Orts 
   expect(errors.console, 'console.error').toEqual([]);
 });
 
-// Fünf Orte vorab im Speicher (Format nach BAUPLAN Abschnitt 4), bevor die App startet
-function seedPlaces(page, count) {
-  return page.addInitScript((n) => {
+// count Orte vorab im Speicher (Format nach BAUPLAN Abschnitt 4), bevor die App startet. Ort i heißt „Ort i+1“
+// (oder labels[i]), liegt auf 300 + 100 · i m (von Hand nicht geändert, elevAuto) und hat die Id ort0000i.
+function seedPlaces(page, count, labels) {
+  return page.addInitScript((arg) => {
     try {
       if (localStorage.getItem('hw:v') !== null) { return; }
       const places = [];
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < arg.n; i++) {
         places.push({
-          id: 'ort0000' + i, label: 'Ort ' + (i + 1), lat: 48.8 + i / 100, lon: 9.4, elev: 300, elevAuto: true, cc: 'DE', tz: null,
+          id: 'ort0000' + i, label: arg.labels[i] || 'Ort ' + (i + 1), lat: 48.8 + i / 100, lon: 9.4, elev: 300 + 100 * i,
+          elevAuto: true, cc: 'DE', tz: null,
           heat: { type: 'radiator', leadMin: 0.5, leadMax: 2, comfort: 20, thresh: null, confirmed: true }, created: 1
         });
         localStorage.setItem('hw:cache:ort0000' + i, JSON.stringify({ v: 2, fetched: 1, om: {} }));
@@ -1324,7 +1401,7 @@ function seedPlaces(page, count) {
     } catch (e) {
       // ohne Speicher gibt es keinen Seed; der Test fiele dann an seinen Erwartungen auf
     }
-  }, count);
+  }, { n: count, labels: labels || [] });
 }
 
 test('Fall 17: bei fünf Orten zeigt „Ort hinzufügen“ errMaxPlaces, nach dem Löschen eines Orts geht es wieder', async ({ page }) => {
@@ -1377,4 +1454,112 @@ test('Fall 17: bei fünf Orten zeigt „Ort hinzufügen“ errMaxPlaces, nach de
   await add.click();
   await expect(page.locator('#s-address')).toBeVisible();
   await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 4 }));
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 3 (Fortsetzung): lange Ortsnamen im Umschalter und in den Einstellungen
+// ---------------------------------------------------------------------------------------------
+
+// Zwei Namen mit der Höchstlänge von 40 Zeichen (LABEL_MAX in app.js): einer mit Leerzeichen und Bindestrichen, wie
+// ihn Photon aus Straße und Hausnummer baut, einer ganz ohne Stelle zum Umbrechen
+const LANG_MIT = 'Bürgermeister-Müller-Straße 12 Winnenden';
+const LANG_OHNE = 'Donaudampfschifffahrtsgesellschaftshafen';
+
+test('Fall 3: Orte mit 40 Zeichen langen Namen schieben weder den Umschalter noch die Einstellungen über den Rand', async ({ page }) => {
+  expect(LANG_MIT).toHaveLength(40);
+  expect(LANG_OHNE).toHaveLength(40);
+  const net = await mockNet(page);
+  await seedPlaces(page, 3, ['Ort 1', LANG_MIT, LANG_OHNE]);
+  await startClock(page);
+  await page.goto('/');
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#placePick')).toBeVisible();
+  await expect(page.locator('#placeSelect option')).toHaveCount(3);
+  await expect(page.locator('#nowTemp')).toContainText('°');
+  // Ein <select> ist so breit wie seine längste Option: auch mit „Ort 1“ gewählt zählt der lange Name
+  await expectNoHorizontalScroll(page, 'Hauptbildschirm, kurzer Name gewählt');
+  for (const [id, name] of [['ort00001', LANG_MIT], ['ort00002', LANG_OHNE]]) {
+    await page.locator('#placeSelect').selectOption(id);
+    await expect.poll(() => storedActive(page)).toBe(id);
+    await expect(page.locator('#nowTemp')).toContainText('°');
+    await expectNoHorizontalScroll(page, 'Hauptbildschirm, ' + name);
+    await expectTapSizes(page, 'Hauptbildschirm, ' + name);
+  }
+
+  await openSettings(page);
+  await expectNoHorizontalScroll(page, 'Einstellungen mit langen Namen');
+  // die Rückfrage beim Löschen trägt den Namen ohne Umbruchstelle mitten im Satz
+  const items = page.locator('#settingsPlaceList > li');
+  await items.nth(2).getByRole('button', { name: deText('btnDelete'), exact: true }).click();
+  await expect(items.nth(2).getByRole('button', { name: deText('settingsDeleteConfirm', { name: LANG_OHNE }), exact: true })).toBeVisible();
+  await expectNoHorizontalScroll(page, 'Einstellungen mit Rückfrage zum langen Namen');
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 12 (Fortsetzung): das Höhenfeld gehört zum aktiven Ort
+// ---------------------------------------------------------------------------------------------
+
+test('Fall 12: Ortswechsel schließt das Höhenfeld samt Fehler; eine späte Höhenabfrage landet beim Ort, für den sie lief', async ({ page }) => {
+  const net = await mockNet(page);
+  await seedPlaces(page, 2);
+  await startClock(page);
+  await page.goto('/');
+  await expect(page.locator('#s-main')).toBeVisible();
+  await openSettings(page);
+  const items = page.locator('#settingsPlaceList > li');
+  const val = page.locator('#settingsElevVal');
+  const input = page.locator('#settingsElevInput');
+  await expect(val).toHaveText(deText('setupElev', { m: 300 }));
+
+  // Ort 1: ungültige Höhe, der Fehler steht unter dem Feld
+  await page.locator('#btnSettingsElev').click();
+  await expect(input).toBeFocused();
+  await input.fill('99999');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#settingsElevErr')).toContainText(deText('errElevRange'));
+
+  // Wechsel auf Ort 2 per Radio: Feld zu, Fehler weg, Anzeige und Feld zeigen die Höhe von Ort 2
+  await items.nth(1).locator('.choice').click();
+  await expect(items.nth(1).locator('input[type=radio]')).toBeChecked();
+  await expect(page.locator('#settingsElevEdit')).toBeHidden();
+  await expect(page.locator('#btnSettingsElev')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#settingsElevErr')).toBeEmpty();
+  await expect(input).not.toHaveAttribute('aria-invalid', /.*/);
+  await expect(val).toHaveText(deText('setupElev', { m: 400 }));
+  await expect(input).toHaveValue('400');
+
+  // Ort 2: Feld leeren, die Höhenabfrage hängt; währenddessen zurück auf Ort 1
+  let releaseElev = null;
+  const elevGate = new Promise((resolve) => { releaseElev = resolve; });
+  net.on.elevation = async (route) => {
+    await elevGate;
+    return answer(route, fixtureText('elev.json'));
+  };
+  const elevations = net.count('elevation');
+  await page.locator('#btnSettingsElev').click();
+  await input.fill('');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => net.count('elevation')).toBe(elevations + 1);
+  await expect(val).toHaveText(deText('setupElevLoading'));
+  await items.nth(0).locator('.choice').click();
+  await expect(items.nth(0).locator('input[type=radio]')).toBeChecked();
+  await expect(val).toHaveText(deText('setupElev', { m: 300 }));
+  await expect(page.locator('#settingsElevEdit')).toBeHidden();
+
+  // die Antwort kommt: Ort 2 bekommt 417 m (automatisch), Ort 1 und seine Anzeige bleiben unberührt
+  releaseElev();
+  await expect.poll(async () => (await storedPlaces(page))[1].elev).toBe(417);
+  expect((await storedPlaces(page))[1]).toMatchObject({ elev: 417, elevAuto: true });
+  expect((await storedPlaces(page))[0]).toMatchObject({ elev: 300, elevAuto: true });
+  await expect(val).toHaveText(deText('setupElev', { m: 300 }));
+  await expect(input).toHaveValue('300');
+
+  // zurück auf Ort 2: die neue Höhe steht da, und der Abruf trägt sie in der URL
+  const forecasts = net.count('forecast');
+  await items.nth(1).locator('.choice').click();
+  await expect(val).toHaveText(deText('setupElev', { m: 417 }));
+  await expect.poll(() => net.count('forecast')).toBe(forecasts + 1);
+  expect(net.log.forecast[net.log.forecast.length - 1]).toMatch(/[?&]elevation=417(&|$)/);
+  expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });

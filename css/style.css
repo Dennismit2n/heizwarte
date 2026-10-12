@@ -490,11 +490,24 @@ input[aria-invalid="true"] {
   font-weight: 700;
 }
 
+/* Ortsnamen bis 40 Zeichen, auch ohne Leerzeichen: lieber mitten im Wort umbrechen als quer scrollen (Fall 3).
+   overflow-wrap: anywhere senkt auch die Mindestbreite im Flex-Layout; die 48-px-Regel der Knöpfe bleibt unberührt. */
+.place-name,
+.choice-hint,
+.place-confirm button,
+#settingsHeatPlace {
+  overflow-wrap: anywhere;
+}
+
+/* Ein <select> ist so breit wie seine längste Option und bricht nicht um: Kasten und Feld dürfen deshalb nie
+   breiter werden als die Zeile, sonst schiebt ein langer Ortsname die Seite über 360 px hinaus (Fall 3) */
 .place-pick {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .head-actions {
@@ -504,6 +517,7 @@ input[aria-invalid="true"] {
 }
 
 select {
+  max-width: 100%;
   font: inherit;
   color: var(--fg);
   background: var(--bg);

@@ -243,23 +243,34 @@
       settingsThresholdsHint: 'Ab diesen Werten schaltet die Ampel eine Stufe höher. Die Voreinstellungen sind Faustregeln.',
       threshWarnMinN: 'Vorwarnung, wenn die Nacht kälter wird als',
       threshWarnDrop48: 'Vorwarnung bei Veränderung des Tagesmittels in 48 Stunden',
-      threshAlarmMinN: 'Heiz-Alarm, wenn die Nacht kälter wird als',
+      threshAlarmMinN: 'Heiz-Alarm, wenn die Nacht mindestens so kalt wird wie',
       threshAlarmDrop48: 'Heiz-Alarm bei Veränderung des Tagesmittels in 48 Stunden',
       threshAlarmGtRise: 'Heiz-Alarm, wenn der Heizbedarf von einem Tag zum nächsten steigt um',
-      threshCritMinN: 'Frost-Stufe, wenn die Nacht kälter wird als',
-      threshColdWind: 'Als windig gilt Wind ab',
-      threshGustLead: 'Früher starten bei Böen ab',
+      threshCritMinN: 'Frost-Stufe, wenn die Nacht mindestens so kalt wird wie',
+      threshColdWind: 'Als windig gilt Wind über',
+      threshGustLead: 'Früher starten bei Böen über',
+      // kurze Hauptwörter der acht Schwellen für die Knöpfe „− / +“ ({what} in stepDown/stepUp)
+      threshNameWarnMinN: 'Vorwarnschwelle für die Nacht',
+      threshNameWarnDrop48: 'Vorwarnschwelle für das Tagesmittel',
+      threshNameAlarmMinN: 'Alarmschwelle für die Nacht',
+      threshNameAlarmDrop48: 'Alarmschwelle für das Tagesmittel',
+      threshNameAlarmGtRise: 'Alarmschwelle für den Heizbedarf',
+      threshNameCritMinN: 'Frostschwelle für die Nacht',
+      threshNameColdWind: 'Windschwelle',
+      threshNameGustLead: 'Böenschwelle',
       settingsReset: 'Auf Faustregel zurücksetzen',
       settingsDeleteConfirm: '„{name}“ wirklich löschen?',
       settingsDeleteLast: 'Das ist dein einziger Ort. Danach beginnt die Einrichtung von vorn. „{name}“ trotzdem löschen?',
-      // {what} ist der Wert des jeweiligen Beschriftungsschlüssels (settingsComfort, settingsLeadMin, …)
+      // {what} ist der Wert des jeweiligen Beschriftungsschlüssels (settingsComfort, settingsLeadMin, …), bei den
+      // Schwellen das kurze Hauptwort (threshName…)
       stepDown: '{what} verringern',
       stepUp: '{what} erhöhen',
-      // Wert mit Einheit am Stepper; {n} ist die Zahl, formatiert mit höchstens einer Nachkommastelle
+      // Wert mit Einheit am Stepper; {n} ist die Zahl, formatiert mit höchstens einer Nachkommastelle.
+      // unitDegrees steht für Veränderungen (Tagesmittel, Heizbedarf), unitCelsius für Temperaturen.
       unitHours: '{n} h',
       unitCelsius: '{n} °C',
       unitKmh: '{n} km/h',
-      unitKd: '{n} Kd',
+      unitDegrees: '{n} Grad',
       themeLabel: 'Darstellung',
       themeSystem: 'System',
       themeLight: 'Hell',

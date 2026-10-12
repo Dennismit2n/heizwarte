@@ -675,6 +675,21 @@ test('assess: eine Regel ohne Chip (alarmDrop48) hebt die Stufe an, ohne „ruhi
   assert.deepEqual(ruhig.reasons.map((r) => r.key), ['calmNights', 'noJumps']);
 });
 
+test('assess: Stufe 3 über critMinN hat immer den Grund „frost“, auch wenn alarmMinN darunter liegt; kein doppelter', () => {
+  // om-frost: Nachttief −4. Eigene Mischung: Vorwarnung erst unter −5, Heiz-Alarm erst ab −10, Frost-Stufe ab 0
+  const v = verdictOf('om-frost.json', JAN13_MS, BERLIN, withThresh(PROF.floorScreed, { warnMinN: -5, alarmMinN: -10, critMinN: 0 }));
+  assert.equal(v.level, 3);
+  assert.deepEqual(v.reasons.map((r) => r.key), ['frost'], 'Stufe 3 nie ohne Begründung');
+  // mit den Faustregeln steht „frost“ schon über alarmMinN da und kommt nicht ein zweites Mal
+  const hart = verdictOf('om-hartfrost.json', JAN13_MS, BERLIN);
+  assert.equal(hart.level, 3);
+  assert.deepEqual(hart.reasons.map((r) => r.key), ['nightMin', 'frost']);
+  // greift critMinN nicht, kommt auch kein Grund dazu
+  const zwei = verdictOf('om-frost.json', JAN13_MS, BERLIN);
+  assert.equal(zwei.level, 2);
+  assert.deepEqual(zwei.reasons.map((r) => r.key), ['nightMin', 'frost']);
+});
+
 test('assess om-frost: Stufe 2, Frostnacht, „durchheizen“, Aufheizzeit nach Heizart', () => {
   const v = verdictOf('om-frost.json', JAN13_MS, BERLIN);
   assert.equal(v.level, 2);

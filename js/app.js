@@ -203,19 +203,24 @@
 
   // Die acht Ampelschwellen je Ort (Abschnitt 7, „Für Fortgeschrittene“) als Stepper. Die Feldnamen sind die von
   // heat.THRESH/Thresh, id ist der Anfang der Element-IDs im Markup und zugleich der Schlüssel der Beschriftung.
-  // **Entwurf** (der Plan nennt keine Grenzen): Der Standardwert (heat.DEFAULT_THRESH) liegt in jedem Bereich, mit Platz
-  // nach beiden Seiten; Temperaturen und Veränderungen in 1-°C-Schritten, Wind in 5 km/h, der Anstieg des Heizbedarfs
-  // in Kd. Die Veränderungen des Tagesmittels (Drop48) sind Abkühlungen, also negativ. Die Reihenfolge warn ≥ alarm ≥ crit
-  // wird nicht erzwungen: jeder Stepper schreibt nur sein eigenes Feld, und heat.assess kommt mit jeder Mischung zurecht.
+  // name ist ein kurzes Hauptwort für die Knöpfe (stepDown/stepUp: „Alarmschwelle für die Nacht erhöhen“); die
+  // sichtbare Beschriftung ist ein Satzanfang und ergäbe dort nur einen Satzfetzen.
+  // **Entwurf** (der Plan nennt keine Grenzen): Der Standardwert (heat.DEFAULT_THRESH) liegt in jedem Bereich;
+  // Temperaturen und Veränderungen in 1-Grad-Schritten, Wind in 5 km/h. Veränderungen (Drop48, der Anstieg des
+  // Heizbedarfs) zeigen „Grad“ statt „°C“, weil sie keine Temperatur sind. Die Veränderungen des Tagesmittels (Drop48)
+  // sind Abkühlungen, also negativ. alarmMinN und critMinN enden bei 0 °C: heat.assess nennt dazu den Grund 'frost'
+  // („Die Nacht bringt Frost.“) und Stufe 3 heißt „Frost / Sturm“; über 0 °C wäre beides falsch. Der Standardwert 0 von
+  // alarmMinN liegt deshalb am oberen Rand. Die Reihenfolge warn ≥ alarm ≥ crit wird nicht erzwungen: jeder Stepper
+  // schreibt nur sein eigenes Feld, und heat.assess kommt mit jeder Mischung zurecht.
   const THRESH_STEPPERS = {
-    warnMinN: { id: 'threshWarnMinN', min: -5, max: 15, step: 1, unit: 'unitCelsius', label: 'threshWarnMinN' },
-    warnDrop48: { id: 'threshWarnDrop48', min: -12, max: -1, step: 1, unit: 'unitCelsius', label: 'threshWarnDrop48' },
-    alarmMinN: { id: 'threshAlarmMinN', min: -10, max: 10, step: 1, unit: 'unitCelsius', label: 'threshAlarmMinN' },
-    alarmDrop48: { id: 'threshAlarmDrop48', min: -15, max: -1, step: 1, unit: 'unitCelsius', label: 'threshAlarmDrop48' },
-    alarmGtRise: { id: 'threshAlarmGtRise', min: 1, max: 15, step: 1, unit: 'unitKd', label: 'threshAlarmGtRise' },
-    critMinN: { id: 'threshCritMinN', min: -20, max: 5, step: 1, unit: 'unitCelsius', label: 'threshCritMinN' },
-    coldWind: { id: 'threshColdWind', min: 10, max: 60, step: 5, unit: 'unitKmh', label: 'threshColdWind' },
-    gustLead: { id: 'threshGustLead', min: 20, max: 100, step: 5, unit: 'unitKmh', label: 'threshGustLead' }
+    warnMinN: { id: 'threshWarnMinN', min: -5, max: 15, step: 1, unit: 'unitCelsius', label: 'threshWarnMinN', name: 'threshNameWarnMinN' },
+    warnDrop48: { id: 'threshWarnDrop48', min: -12, max: -1, step: 1, unit: 'unitDegrees', label: 'threshWarnDrop48', name: 'threshNameWarnDrop48' },
+    alarmMinN: { id: 'threshAlarmMinN', min: -10, max: 0, step: 1, unit: 'unitCelsius', label: 'threshAlarmMinN', name: 'threshNameAlarmMinN' },
+    alarmDrop48: { id: 'threshAlarmDrop48', min: -15, max: -1, step: 1, unit: 'unitDegrees', label: 'threshAlarmDrop48', name: 'threshNameAlarmDrop48' },
+    alarmGtRise: { id: 'threshAlarmGtRise', min: 1, max: 15, step: 1, unit: 'unitDegrees', label: 'threshAlarmGtRise', name: 'threshNameAlarmGtRise' },
+    critMinN: { id: 'threshCritMinN', min: -20, max: 0, step: 1, unit: 'unitCelsius', label: 'threshCritMinN', name: 'threshNameCritMinN' },
+    coldWind: { id: 'threshColdWind', min: 10, max: 60, step: 5, unit: 'unitKmh', label: 'threshColdWind', name: 'threshNameColdWind' },
+    gustLead: { id: 'threshGustLead', min: 20, max: 100, step: 5, unit: 'unitKmh', label: 'threshGustLead', name: 'threshNameGustLead' }
   };
   const THRESH_FIELDS = ['warnMinN', 'warnDrop48', 'alarmMinN', 'alarmDrop48', 'alarmGtRise', 'critMinN', 'coldWind', 'gustLead'];
 
@@ -1024,6 +1029,9 @@
   // je Ort-Id). Ein Abruf kann mit dem 429-Wiederholversuch über eine Minute dauern: eine globale Sperre hielte
   // den Ortswechsel so lange fest, und die Daten des alten Orts erschienen unter dem Namen des neuen.
   const inflight = new Map();
+  // Ende der Wartezeit nach dem ersten 429 je Ort-Id (ms der Geräteuhr), solange der Abruf läuft. Wechselt man in der
+  // Wartezeit weg und wieder zurück, steht wieder statusWaiting mit der Restzeit da und nicht „Wird aktualisiert“.
+  const waitingUntil = new Map();
 
   function isNum(x) {
     return typeof x === 'number' && Number.isFinite(x);
@@ -1058,6 +1066,7 @@
   }
 
   function onWait(id, ms) {
+    waitingUntil.set(id, Date.now() + ms);
     if (id !== state.activeId) { return; }
     state.status = 'waiting';
     state.waitS = Math.ceil(ms / 1000);
@@ -1127,6 +1136,7 @@
       failure = e;
     }
     inflight.delete(id);
+    waitingUntil.delete(id);
     guard(() => {
       renderReload();
       if (failure) { onFetchFailed(id, failure); } else { onFetched(id, result); }
@@ -1159,7 +1169,19 @@
     if (document.visibilityState === 'visible' && state.place) { refresh(false); }
   }
 
-  // Wechsel auf einen anderen Ort: dessen Cache sofort anzeigen (oder nichts), dann neu abrufen
+  // Läuft für den Ort noch ein Abruf in der Wartezeit nach dem ersten 429, gilt wieder 'waiting' mit der Restzeit
+  // (Satz statusWaiting, einmal gesetzt, kein Herunterzählen). Sonst bleibt der Zustand, wie er ist.
+  function resumeWait(id) {
+    const until = waitingUntil.get(id) || 0;
+    const left = until - Date.now();
+    if (!inflight.has(id) || left <= 0) { return; }
+    state.status = 'waiting';
+    state.waitS = Math.ceil(left / 1000);
+    state.waitUntilMs = until;
+  }
+
+  // Wechsel auf einen anderen Ort: dessen Cache sofort anzeigen (oder nichts), dann neu abrufen. Ein offenes Höhenfeld
+  // der Einstellungen gehört zum alten Ort: Es geht zu, sein Fehler verschwindet, die Anzeige zeigt den neuen Ort.
   function activatePlace(id) {
     const place = placeById(id);
     if (!place) { return; }
@@ -1167,8 +1189,10 @@
     state.place = place;
     persist('active', id);
     state.status = null;
+    resumeWait(id);
     loadCache();
     render();
+    guard(() => openSettingsElev(false));
     refresh(true);
   }
 
@@ -1762,8 +1786,9 @@
   // Änderungen an Stepper und Heizart rechnen nur Ampel und Fahrplan neu, entprellt (Abschnitt 7)
   const RECALC_MS = 150;
   let recalcTimer = null;
-  // verwirft die späte Antwort einer Höhenabfrage, wenn inzwischen eine neue Eingabe gespeichert wurde
-  let settingsElevToken = 0;
+  // verwirft die späte Antwort einer Höhenabfrage, wenn für denselben Ort inzwischen eine neue Eingabe kam. Je Ort-Id:
+  // Ein Ortswechsel während der Abfrage verwirft sie nicht, die Antwort landet beim Ort, für den sie gefragt wurde.
+  const settingsElevToken = new Map();
 
   // Löscht einen Schlüssel, außer die Daten stammen von einer neueren Fassung (dann schreibt app.js nichts)
   function forget(key) {
@@ -1811,6 +1836,8 @@
 
   // Zahl mit Einheit in der Mitte, Beschriftung der Knöpfe aus stepDown/stepUp; am Rand bleibt der Knopf
   // fokussierbar (aria-disabled), sieht aber gedämpft aus. Bei der Heizart Nachtspeicher entfallen beide Aufheizzeiten.
+  // Eine Zahl wird nur neu geschrieben, wenn sie sich ändert: Sonst läse jede Live-Region bei jedem Schritt vor, auch
+  // die zwei unveränderten (wie in renderThresh).
   function renderSteppers() {
     const place = state.place;
     if (!place) { return; }
@@ -1822,9 +1849,11 @@
       const spec = STEPPERS[field];
       const value = values[field];
       const what = t(spec.label);
+      const out = $(field + 'Out');
       const down = $(field + 'Down');
       const up = $(field + 'Up');
-      $(field + 'Out').textContent = isNum(value) ? t(spec.unit, { n: numAuto(value) }) : '';
+      const text = isNum(value) ? t(spec.unit, { n: numAuto(value) }) : '';
+      if (out.textContent !== text) { out.textContent = text; }
       down.setAttribute('aria-label', t('stepDown', { what }));
       up.setAttribute('aria-label', t('stepUp', { what }));
       setAriaDisabled(down, isNum(value) && value <= spec.min);
@@ -1849,7 +1878,7 @@
   // „Für Fortgeschrittene“: die acht Schwellen mit Zahl und Einheit. Angezeigt wird, was heat.thresholds(place) liefert
   // (eigener Wert, sonst Standardwert). Eine Zahl wird nur neu geschrieben, wenn sie sich ändert: Die Live-Region läse
   // sonst bei „Auf Faustregel zurücksetzen“ alle acht Werte vor, auch die unveränderten. Am Rand bleibt der Knopf
-  // fokussierbar (aria-disabled).
+  // fokussierbar (aria-disabled). Die Knöpfe nennen die Schwelle mit ihrem kurzen Hauptwort (spec.name).
   function renderThresh() {
     const place = state.place;
     if (!place) { return; }
@@ -1857,7 +1886,7 @@
     for (const field of THRESH_FIELDS) {
       const spec = THRESH_STEPPERS[field];
       const value = T[field];
-      const what = t(spec.label);
+      const what = t(spec.name);
       const out = $(spec.id + 'Out');
       const down = $(spec.id + 'Down');
       const up = $(spec.id + 'Up');
@@ -1934,30 +1963,39 @@
   // Höhe neu ab und gilt als automatisch. Danach holt refresh(true) das Wetter für die neue Höhe, denn sie steckt in der
   // Forecast-URL und der Cache stammt von der alten. Ungültig wird nicht gespeichert; der Satz steht in der
   // Alert-Zeile unter dem Feld, der Fokus bleibt, wo er ist (der change kommt oft erst beim Verlassen des Felds).
+  // Während der Neuabfrage steht setupElevLoading in der Anzeige (wie in S4). Wechselt der Ort in der Zeit, landet die
+  // Antwort trotzdem bei dem Ort, für den sie gefragt wurde; Anzeige und Abruf ziehen nur nach, wenn er noch aktiv ist
+  // (sonst holt der nächste Wechsel zurück per refresh(true) ohnehin das Wetter mit der neuen Höhe).
   async function onElevCommit() {
     const place = state.place;
     if (!place) { return; }
     const input = $('settingsElevInput');
-    const token = ++settingsElevToken;
+    const token = (settingsElevToken.get(place.id) || 0) + 1;
+    settingsElevToken.set(place.id, token);
     clearElevError();
     const parsed = parseElev(input.value, !!(input.validity && input.validity.badInput));
     if (parsed.kind === 'bad') {
       input.setAttribute('aria-invalid', 'true');
       $('settingsElevErr').appendChild(make('p', '', t('errElevRange')));
+      // eine noch laufende Neuabfrage ist damit verworfen: die Anzeige zeigt wieder die gespeicherte Höhe
+      renderSettingsElev();
       return;
     }
     let auto = null;
     if (parsed.kind === 'empty') {
+      $('settingsElevVal').textContent = t('setupElevLoading');
+      $('settingsElevAuto').hidden = true;
       // geo.elevation rundet auf drei Stellen (die Koordinaten des Orts sind es schon) und wirft nie
       auto = await geo.elevation(place.lat, place.lon);
-      if (token !== settingsElevToken || state.place !== place) { return; }
+      if (token !== settingsElevToken.get(place.id) || !placeById(place.id)) { return; }
     }
     const patch = elevPatch(parsed, auto);
     if (!patch) { return; }
     place.elev = patch.elev;
     place.elevAuto = patch.elevAuto;
     persist('places', state.places);
-    if (parsed.kind === 'empty') { input.value = patch.elev === null ? '' : String(patch.elev); }
+    if (place.id !== state.activeId) { return; }
+    if (parsed.kind === 'empty' && !$('settingsElevEdit').hidden) { input.value = patch.elev === null ? '' : String(patch.elev); }
     renderSettingsElev();
     // Lief schon ein Abruf mit der alten Höhe, hängt sich refresh() nur an ihn an: danach noch einmal
     const running = inflight.has(place.id);
@@ -2096,7 +2134,13 @@
       close();
       delBtn.focus();
     });
+    // Der Fokus springt auf die Frage. Wer Enter auf „Löschen“ gedrückt hält, schickt die Wiederholungen der Taste
+    // hierher: Sie lösen nichts aus (e.repeat), erst ein neuer Druck löscht, eine zweite Entscheidung.
     box.addEventListener('keydown', (e) => {
+      if (e.repeat && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === 'Escape') {
         close();
         delBtn.focus();

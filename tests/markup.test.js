@@ -896,9 +896,13 @@ test('Einstellungen: „Für Fortgeschrittene“ ist ein zugeklapptes <details> 
   // das <details> kommt nach der Höhe und vor dem unteren „Zurück“
   assert.ok(von > slice.indexOf('id="settingsElevInput"') && von < slice.indexOf('id="btnSettingsBack2"'));
   // alle Einheiten der acht Stepper gibt es in de
-  for (const k of ['unitCelsius', 'unitKmh', 'unitKd']) { assert.ok(has(de, k), k); }
+  for (const k of ['unitCelsius', 'unitKmh', 'unitDegrees']) { assert.ok(has(de, k), k); }
   assert.match(de.unitKmh, /^\{n\} km\/h$/);
-  assert.match(de.unitKd, /^\{n\} Kd$/);
+  // Veränderungen (Tagesmittel, Heizbedarf) im Laienwort „Grad“, kein Fachwort „Kd“ am Stepper
+  assert.match(de.unitDegrees, /^\{n\} Grad$/);
+  assert.ok(!has(de, 'unitKd'), 'unitKd ist durch unitDegrees ersetzt');
+  // die Knöpfe nennen jede Schwelle mit ihrem Hauptwort (threshName…), nicht mit dem Satzanfang der Beschriftung
+  for (const f of felder) { assert.ok(has(de, 'threshName' + f), 'threshName' + f); }
 });
 
 test('Einstellungen: die Schwellen-Stepper schreiben nur ihr Feld in place.heat.thresh, „Zurücksetzen“ setzt null, beide rechnen entprellt neu', () => {
@@ -914,6 +918,7 @@ test('Einstellungen: die Schwellen-Stepper schreiben nur ihr Feld in place.heat.
   const zeichnen = funktion(appCode, 'renderThresh');
   assert.ok(zeichnen.includes('heat.thresholds(place)'), 'angezeigt wird der Mischwert aus eigenem und Standardwert');
   assert.ok(zeichnen.includes("t('stepDown', { what })") && zeichnen.includes("t('stepUp', { what })"), 'aria-label aus stepDown/stepUp');
+  assert.ok(zeichnen.includes('const what = t(spec.name);'), 'aria-label der Schwellen aus dem Hauptwort, nicht aus dem Satzanfang');
   assert.ok(zeichnen.includes('t(spec.unit, { n: numAuto(value) })'), 'Zahl mit Einheit über den Schlüssel');
   assert.ok(zeichnen.includes('setAriaDisabled'), 'am Rand aria-disabled, nie disabled');
   assert.doesNotMatch(zeichnen, /\.disabled\b|innerHTML/);
@@ -1079,6 +1084,11 @@ test('Einstellungen: Ort hinzufügen beginnt den Nachtrag bei S2, bei fünf Orte
 test('Ortswechsel: Umschalter und Radio gehen beide über activatePlace (hw:active, Cache zeigen, refresh(true))', () => {
   const wechsel = funktion(appCode, 'activatePlace');
   assert.ok(wechsel.includes("persist('active', id)") && wechsel.includes('loadCache()') && wechsel.includes('refresh(true)'));
+  // die Wartezeit nach dem ersten 429 gilt je Ort weiter; ein offenes Höhenfeld des alten Orts geht zu
+  assert.ok(wechsel.indexOf('resumeWait(id)') > wechsel.indexOf('state.status = null;') && wechsel.indexOf('resumeWait(id)') < wechsel.indexOf('render();'));
+  assert.ok(wechsel.includes('openSettingsElev(false)'));
+  assert.ok(funktion(appCode, 'onWait').indexOf('waitingUntil.set(id') < funktion(appCode, 'onWait').indexOf('if (id !== state.activeId)'),
+    'die Wartezeit wird auch für einen nicht aktiven Ort gemerkt');
   assert.ok(funktion(appCode, 'onPlaceChange').includes('activatePlace(id)'));
   assert.ok(funktion(appCode, 'onPlacePick').includes('activatePlace(id)'));
   assert.match(appCode, /on\('placeSelect', 'change', onPlaceChange\);/);
