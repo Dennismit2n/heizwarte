@@ -408,10 +408,12 @@ test('Fahrplan: app.js verdrahtet Überschrift, Stärken, MOSMIX-Regel und Ortsz
   // MOSMIX: nur mit Station innerhalb 25 km (Meter), und nur dann der Satz
   assert.match(code, /MOS_NEAR_M = 25000;/);
   assert.match(code, /s\.distance <= MOS_NEAR_M/);
-  assert.match(code, /entry\.disagree && mosNear\(view\.m\) && isNum\(night\.mosMin\)/);
+  assert.match(code, /entry\.disagree && fmt\.mosNear && isNum\(night\.mosMin\)/);
+  assert.match(code, /mosNear: mosNear\(view\.m\)/, 'planFmt reicht die MOSMIX-Regel an planRows weiter');
   // Start fällig nach heat.isDue, Handlungssatz und Fahrplan lesen denselben verdict.plan
   assert.match(code, /heat\.isDue\(entry, view\.now\.ms, night\.toMs\)/);
-  assert.match(code, /v\.plan\.forEach\(\(entry, k\) =>/);
+  assert.match(code, /verdict\.plan\.forEach\(\(entry, k\) =>/);
+  assert.match(code, /planRows\(view\.v, state\.place, planFmt\(view\)\)/, 'renderPlan zeichnet die Zeilen aus planRows');
   assert.match(code, /function planPick\(view\)\s*\{[^}]*view\.v\.plan\[/);
   assert.match(code, /const entry = planPick\(view\);/, 'der Handlungssatz der Ampel nimmt planPick');
   // render: Fahrplan nach den Tagen, jeder Block für sich im guard
@@ -422,8 +424,9 @@ test('Fahrplan: app.js verdrahtet Überschrift, Stärken, MOSMIX-Regel und Ortsz
   assert.doesNotMatch(plan, /new Date|getHours|getMinutes|toLocaleTimeString|toLocaleDateString|Intl\./);
   assert.match(plan, /f\.time\(entry\.startMs, tz\)/);
   assert.match(plan, /weather\.dayKeyOf\(entry\.startMs, tz\)/);
-  assert.match(plan, /f\.time\(night\.atMs, tz\)/);
-  assert.match(plan, /f\.time\(entry\.onsetMs, tz\)/);
+  assert.match(plan, /fmt\.time\(night\.atMs\)/);
+  assert.match(plan, /fmt\.time\(entry\.onsetMs\)/);
+  assert.match(plan, /time: \(ms\) => f\.time\(ms, tz\)/, 'planFmt rechnet jede Uhrzeit in der Ortszeit des Orts');
   assert.equal(plan.includes('view.m.tz'), true);
 });
 

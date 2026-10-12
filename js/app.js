@@ -1100,20 +1100,43 @@
     return t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time });
   }
 
-  // Handlungssatz der Stufe. Beim Nachtspeicher gibt es keine Startzeit (startMs null): dort steht die Aufladung.
-  function actionText(view, entry) {
-    const level = view.v.level;
-    if (level === 0 || !entry) { return t(TITLE_KEYS[0]); }
-    if (entry.charge) { return t('chargeTonight', { level: t(CHARGE_KEY[entry.charge]) }); }
-    return t(TITLE_KEYS[level], { when: whenPhrase(view, entry) });
+  // Ein Nachtspeicher kennt weder Startzeit noch Aufheizzeit (heat.plan setzt startMs null und charge). Maßgeblich ist
+  // die Heizart des Orts; ein Eintrag mit charge zählt auch dann, denn „Start ab –“ wäre in jedem Fall falsch.
+  function isStorage(place, entry) {
+    return !!(place && place.heat && place.heat.type === 'storage') || !!(entry && entry.charge);
   }
 
-  // Abkühlung und Aufheizzeit; beim Nachtspeicher entfällt der Satz, weil er keine Aufheizzeit kennt
-  function bodyText(view, entry) {
-    const level = view.v.level;
-    if (level === 0) { return t(TEXT_KEYS[0]); }
-    if (!entry || entry.charge) { return ''; }
-    return t(TEXT_KEYS[level], { onset: i18n.fmt.time(entry.onsetMs, view.m.tz), lead: numAuto(entry.lead) });
+  // Handlungssatz und Begründung der Ampel als fertiger Text. Rein: kein DOM, keine Module, keine Gerätezeit.
+  //   fmt.t(key, vars)   Text zum Schlüssel
+  //   fmt.when(entry)    Satzteil für levelTitle1–3 („jetzt“, „heute ab 15:00“, „Dienstag ab 15:00“)
+  //   fmt.time(ms)       Uhrzeit in der Ortszeit des Orts
+  //   fmt.num(x)         Zahl mit höchstens einer Nachkommastelle
+  // Stufe 0 gilt für jede Heizart gleich (levelTitle0, levelText0). Ab Stufe 1 steht beim Nachtspeicher
+  // chargeTonight{level} statt levelTitle1–3, und levelText1–3 entfällt: Der Satz nennt „{lead} Stunden
+  // Aufheizzeit“, und der Nachtspeicher hat keine.
+  function verdictLines(level, entry, place, fmt) {
+    if (level === 0) { return { action: fmt.t(TITLE_KEYS[0]), body: fmt.t(TEXT_KEYS[0]) }; }
+    if (!entry) { return { action: fmt.t(TITLE_KEYS[0]), body: '' }; }
+    if (isStorage(place, entry)) {
+      const action = entry.charge ? fmt.t('chargeTonight', { level: fmt.t(CHARGE_KEY[entry.charge]) }) : '';
+      return { action, body: '' };
+    }
+    return {
+      action: fmt.t(TITLE_KEYS[level], { when: fmt.when(entry) }),
+      body: fmt.t(TEXT_KEYS[level], { onset: fmt.time(entry.onsetMs), lead: fmt.num(entry.lead) })
+    };
+  }
+
+  // Die Formatierer für verdictLines aus dem Stand der Seite: Sprache aus i18n, Ortszeit des Orts
+  function verdictFmt(view) {
+    const f = i18n.fmt;
+    const tz = view.m.tz;
+    return {
+      t,
+      when: (entry) => whenPhrase(view, entry),
+      time: (ms) => f.time(ms, tz),
+      num: numAuto
+    };
   }
 
   function reasonText(r) {
@@ -1149,8 +1172,9 @@
     const entry = planPick(view);
     sec.style.setProperty('--lv', LEVEL_COLOR[v.level]);
     setLine('verdictTitle', t('levelOf', { n: v.level, name: t(LEVEL_KEYS[v.level]) }));
-    setLine('verdictAction', actionText(view, entry));
-    setLine('verdictText', bodyText(view, entry));
+    const lines = verdictLines(v.level, entry, state.place, verdictFmt(view));
+    setLine('verdictAction', lines.action);
+    setLine('verdictText', lines.body);
     const list = $('verdictReasons');
     list.replaceChildren();
     for (const r of v.reasons) {
@@ -1335,46 +1359,88 @@
     return upFirst(t('planDay', { day: f.wday(entry.startMs, tz, i18n.lang, true), time }));
   }
 
-  // Eine Nacht. Beim Nachtspeicher steht statt des Starts die Aufladung (kein Start, keine Aufheizzeit), und die
-  // Hinweise „fällig“, „optional“ und „Böen“ entfallen; die zweite Meinung gilt für jede Heizart.
-  function planItem(view, entry, night) {
+  // Die Zeilen des Fahrplans als fertiger Text, je Nacht eine Karte: [{ head, lines: [{ cls, text }] }].
+  // Rein: kein DOM, keine Module, keine Gerätezeit. Aus verdict kommen plan und nights (heat.assess), aus place
+  // die Heizart; alles, was von Sprache und Ortszeit abhängt, bringt fmt mit:
+  //   fmt.t(key, vars)                 Text zum Schlüssel
+  //   fmt.time(ms)                     Uhrzeit in der Ortszeit des Orts
+  //   fmt.deg(x, digits)               Grad mit „°“
+  //   fmt.num(x)                       Zahl mit höchstens einer Nachkommastelle (Aufheizzeit)
+  //   fmt.todayIdx                     Index des heutigen Tages im Modell (verdict.nights[k].dayIdx ist derselbe Index)
+  //   fmt.mosNear                      liegt die MOSMIX-Station nah genug, damit die zweite Meinung zählt
+  //   fmt.nightName(night)             „Heute Nacht“, „Morgen Nacht“, „Mittwoch Nacht“
+  //   fmt.isDue(entry, night)          ist der Start fällig (heat.isDue)
+  //   fmt.startLine(entry, night, due) Zeile mit dem Start: „Jetzt“, „Start ab 15:00“, „Montag ab 22:00“
+  // Nachtspeicher: statt des Starts steht je Abend die Aufladung (chargeTonight für heute, planChargeEvening für die
+  // folgenden), und es gibt weder eine Startzeile noch die Hinweise „fällig“, „optional“ und „Böen“, weder Heizstufe
+  // noch Aufheizzeit. Tiefstwert und, wenn nah genug und uneinig, die zweite Meinung gelten für jede Heizart.
+  function planRows(verdict, place, fmt) {
+    const rows = [];
+    if (!verdict || !Array.isArray(verdict.plan) || !Array.isArray(verdict.nights)) { return rows; }
+    verdict.plan.forEach((entry, k) => {
+      const night = verdict.nights[k];
+      if (!entry || !night) { return; }
+      const storage = isStorage(place, entry);
+      const lines = [];
+      if (storage) {
+        if (entry.charge) {
+          const level = fmt.t(CHARGE_KEY[entry.charge]);
+          lines.push({
+            cls: 'plan-when',
+            text: night.dayIdx === fmt.todayIdx ? fmt.t('chargeTonight', { level }) : fmt.t('planChargeEvening', { level })
+          });
+        }
+      } else {
+        const due = fmt.isDue(entry, night);
+        lines.push({ cls: 'plan-when', text: fmt.startLine(entry, night, due) });
+        const tag = entry.optional ? fmt.t('planOptional') : (due ? fmt.t('planDue') : '');
+        if (tag) { lines.push({ cls: 'plan-tag', text: tag }); }
+        lines.push({ cls: 'plan-strength', text: fmt.t(STRENGTH_KEY[entry.strength]) });
+      }
+      lines.push({ cls: 'plan-meta', text: fmt.t('planNightMin', { t: fmt.deg(night.min, 1), time: fmt.time(night.atMs) }) });
+      if (!storage) {
+        lines.push({ cls: 'plan-meta', text: fmt.t('planLead', { onset: fmt.time(entry.onsetMs), lead: fmt.num(entry.lead) }) });
+        if (entry.gusty) { lines.push({ cls: 'plan-note', text: fmt.t('planGusty') }); }
+      }
+      // Richtungsneutral: Die Bedingung löst in beide Richtungen aus, und die zweite Meinung ist kein Fehler
+      if (entry.disagree && fmt.mosNear && isNum(night.mosMin)) {
+        lines.push({ cls: 'plan-note', text: fmt.t('planDisagree', { t: fmt.deg(night.mosMin, 1) }) });
+      }
+      rows.push({ head: fmt.nightName(night), lines });
+    });
+    return rows;
+  }
+
+  // Die Formatierer für planRows aus dem Stand der Seite: Sprache aus i18n, Ortszeit des Orts (view.m.tz)
+  function planFmt(view) {
     const f = i18n.fmt;
     const tz = view.m.tz;
+    return {
+      t,
+      time: (ms) => f.time(ms, tz),
+      deg: (x, digits) => f.deg(x, digits),
+      num: numAuto,
+      todayIdx: view.todayIdx,
+      mosNear: mosNear(view.m),
+      nightName: (night) => nightName(view, night),
+      isDue: (entry, night) => heat.isDue(entry, view.now.ms, night.toMs),
+      startLine: (entry, night, due) => planWhen(view, entry, night, due)
+    };
+  }
+
+  // Eine Karte: Überschrift der Nacht und ihre Zeilen, alles per textContent
+  function planItem(row) {
     const li = make('li', 'plan-item');
-    li.appendChild(make('h3', '', nightName(view, night)));
-    if (entry.charge) {
-      const level = t(CHARGE_KEY[entry.charge]);
-      li.appendChild(make('p', 'plan-when', night.dayIdx === view.todayIdx
-        ? t('chargeTonight', { level })
-        : t('planChargeEvening', { level })));
-    } else {
-      const due = heat.isDue(entry, view.now.ms, night.toMs);
-      li.appendChild(make('p', 'plan-when', planWhen(view, entry, night, due)));
-      const tag = entry.optional ? t('planOptional') : (due ? t('planDue') : '');
-      if (tag) { li.appendChild(make('p', 'plan-tag', tag)); }
-      li.appendChild(make('p', 'plan-strength', t(STRENGTH_KEY[entry.strength])));
-    }
-    li.appendChild(make('p', 'plan-meta', t('planNightMin', { t: f.deg(night.min, 1), time: f.time(night.atMs, tz) })));
-    if (!entry.charge) {
-      li.appendChild(make('p', 'plan-meta', t('planLead', { onset: f.time(entry.onsetMs, tz), lead: numAuto(entry.lead) })));
-      if (entry.gusty) { li.appendChild(make('p', 'plan-note', t('planGusty'))); }
-    }
-    // Richtungsneutral: Die Bedingung löst in beide Richtungen aus, und die zweite Meinung ist kein Fehler
-    if (entry.disagree && mosNear(view.m) && isNum(night.mosMin)) {
-      li.appendChild(make('p', 'plan-note', t('planDisagree', { t: f.deg(night.mosMin, 1) })));
-    }
+    li.appendChild(make('h3', '', row.head));
+    for (const line of row.lines) { li.appendChild(make('p', line.cls, line.text)); }
     return li;
   }
 
   function renderPlan(view) {
     const list = $('planList');
     list.replaceChildren();
-    const v = view ? view.v : null;
-    if (v) {
-      v.plan.forEach((entry, k) => {
-        if (v.nights[k]) { list.appendChild(planItem(view, entry, v.nights[k])); }
-      });
-    }
+    const rows = view ? planRows(view.v, state.place, planFmt(view)) : [];
+    for (const row of rows) { list.appendChild(planItem(row)); }
     $('plan').hidden = !list.firstChild;
     $('planHead').textContent = list.firstChild ? planHeading(state.place) : '';
   }
@@ -1537,4 +1603,8 @@
       init();
     }
   }
+
+  // Nur für Node-Tests (tests/app.test.js): die zwei reinen Zeilenfunktionen von Ampel und Fahrplan. Im Browser gibt es
+  // kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
+  if (typeof module !== 'undefined' && module.exports) { module.exports = { verdictLines, planRows }; }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
