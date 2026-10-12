@@ -3,9 +3,9 @@
  *
  * Stand dieses Schritts: die Einrichtung S1 bis S5 (BAUPLAN Abschnitt 6), der Hauptbildschirm bis zum
  * Heizfahrplan: Kopfzeile, Statuszeile, Jetzt, Ampel, Warnungen, Tage, Fahrplan (Abschnitt 8, Blöcke 1 bis 7) samt
- * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Der Weg
- * „Ort hinzufügen“, Theme und Sprache, die Schwellen für Fortgeschrittene und die Kurve kommen in den nächsten
- * Schritten dazu.
+ * Abruf (refresh) mit Cache je Ort, und die Einstellungen (Ortsliste mit Löschen, Heizart, Stepper, Höhe). Bis zu
+ * fünf Orte: Umschalter im Kopf, Radio je Ort in den Einstellungen, „Ort hinzufügen“ als Nachtrag ab S2. Theme und
+ * Sprache, die Schwellen für Fortgeschrittene und die Kurve kommen in den nächsten Schritten dazu.
  *
  * Aller Text der Oberfläche steht in i18n.js und kommt hier nur über t() in die Seite. Was ein Dienst liefert
  * (Photon-Beschriftungen, Warntexte), geht ausschließlich per textContent hinein. innerHTML gibt es nur in
@@ -212,6 +212,29 @@
     return null;
   }
 
+  // Ortsliste (Abschnitt 4 hw:places, Abschnitt 6 Nachtrag, Abschnitt 8 Kopfzeile): Regeln ohne DOM und ohne Speicher.
+  // Höchstens MAX_PLACES Orte: ein Druck auf „Ort hinzufügen“ bei vollem Maximum zeigt errMaxPlaces statt der Einrichtung.
+  function canAddPlace(places) {
+    return Array.isArray(places) && places.length < MAX_PLACES;
+  }
+
+  // Die Liste mit dem neuen Ort am Ende, als neues Array (die alte bleibt unberührt). Ist das Maximum erreicht,
+  // gibt es null zurück: ein sechster Ort ist unmöglich, auch wenn eine Prüfung davor ausgelassen wurde.
+  function appendPlace(places, place) {
+    return canAddPlace(places) ? places.concat([place]) : null;
+  }
+
+  // Der aktive Ort: activeId, solange es ihn in der Liste gibt, sonst der erste Ort; ohne Ort null (Abschnitt 4, hw:active)
+  function resolveActive(places, activeId) {
+    if (!Array.isArray(places) || places.length === 0) { return null; }
+    return places.some((p) => p.id === activeId) ? activeId : places[0].id;
+  }
+
+  // Ab zwei Orten steht im Kopf der Umschalter (Beschriftung und Auswahlfeld), bei einem Ort nur sein Name
+  function showsSwitcher(places) {
+    return Array.isArray(places) && places.length > 1;
+  }
+
   // Orte und aktiver Ort nach dem Löschen von deletedId. Der aktive Ort bleibt, solange es ihn gibt; sonst rückt der
   // Ort nach, der an seine Stelle gerutscht ist (am Listenende der davor); ohne Ort bleibt null.
   function afterDelete(places, deletedId, activeId) {
@@ -258,8 +281,7 @@
   function loadPlaces() {
     const raw = storage.get('places', []);
     state.places = Array.isArray(raw) ? raw.filter(isPlace).slice(0, MAX_PLACES) : [];
-    const active = storage.get('active', null);
-    state.activeId = placeById(active) ? active : (state.places.length ? state.places[0].id : null);
+    state.activeId = resolveActive(state.places, storage.get('active', null));
     state.place = placeById(state.activeId);
   }
 
@@ -862,7 +884,7 @@
       showError('confirm', ['errElevRange']);
       return;
     }
-    if (state.places.length >= MAX_PLACES) {
+    if (!canAddPlace(state.places)) {
       showError('confirm', ['errMaxPlaces']);
       return;
     }
@@ -884,7 +906,15 @@
     }
 
     const place = makePlace(s, elev, auto);
-    state.places.push(place);
+    const grown = appendPlace(state.places, place);
+    if (!grown) {
+      // sonst nicht erreichbar (die Prüfung oben): trotzdem nie ein sechster Ort
+      s.busy = false;
+      markBusy($('btnConfirmYes'), false, 'setupConfirmYes');
+      showError('confirm', ['errMaxPlaces']);
+      return;
+    }
+    state.places = grown;
     persist('places', state.places);
     persist('active', place.id);
     state.activeId = place.id;
@@ -1148,7 +1178,7 @@
 
   // Ortszeile: bei einem Ort der Name als Text, ab zwei Orten Beschriftung und natives Auswahlfeld
   function renderPlaces() {
-    const many = state.places.length > 1;
+    const many = showsSwitcher(state.places);
     $('placeName').textContent = state.place ? state.place.label : '';
     $('placeName').hidden = many;
     $('placePick').hidden = !many;
@@ -2019,13 +2049,44 @@
     renderSettingsElev();
   }
 
+  // „Ort hinzufügen“ bleibt immer aktiv (nie ein deaktivierter Knopf ohne Satz, Abschnitt 6). Bei fünf Orten zeigt ein
+  // Druck errMaxPlaces in der Alert-Zeile direkt über dem Knopf; die Ortsliste mit „Löschen“ steht darüber. Das Flag
+  // hält den Satz über einen Sprachwechsel; er verschwindet, sobald wieder Platz ist (Löschen) oder die Einstellungen
+  // neu geöffnet werden.
+  let placesFull = false;
+
+  function renderPlacesError() {
+    const box = $('settingsPlacesErr');
+    box.replaceChildren();
+    if (placesFull && !canAddPlace(state.places)) {
+      box.appendChild(make('p', '', t('errMaxPlaces')));
+    } else {
+      placesFull = false;
+    }
+  }
+
+  // Der Nachtrag beginnt bei S2 (Zähler „1 von 4“, „Zurück“ führt hierher zurück); der neue Ort wird bei „Ja“ in S4 aktiv
+  function onAddPlace() {
+    if (!canAddPlace(state.places)) {
+      placesFull = true;
+      renderPlacesError();
+      $('settingsPlacesErr').focus();
+      return;
+    }
+    placesFull = false;
+    renderPlacesError();
+    showSetup({ add: true });
+  }
+
   function renderSettings() {
     guard(renderSettingsPlaces);
+    guard(renderPlacesError);
     guard(renderSettingsActive);
   }
 
   function onSettingsOpen() {
     state.setup = null;
+    placesFull = false;
     openSettingsElev(false);
     renderSettings();
     showScreen('s-settings');
@@ -2127,6 +2188,7 @@
     // „Neu laden“ ruft immer ab und hängt sich an einen laufenden Abruf an (refresh(true))
     on('reload', 'click', () => { refresh(true); });
     on('settingsBtn', 'click', onSettingsOpen);
+    on('btnAddPlace', 'click', onAddPlace);
     on('btnSettingsBack', 'click', onSettingsBack);
     on('btnSettingsBack2', 'click', onSettingsBack);
     on('placeSelect', 'change', onPlaceChange);
@@ -2199,12 +2261,14 @@
 
   // Nur für Node-Tests (tests/app.test.js): die reinen Funktionen von Ampel, Fahrplan, Statuszeile, Jetzt-Block,
   // Umriss und Hausnummer, die Zeitlogik des Fahrplans (whenPhrase, nightName, planWhen mit zt) und die Regeln der
-  // Einstellungen (STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel). Im Browser gibt
-  // es kein module, app.js bleibt dort ohne Export und ohne Eintrag in Heizwarte.
+  // Einstellungen (STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel) und die Ortsliste
+  // (MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher). Im Browser gibt es kein module, app.js
+  // bleibt dort ohne Export und ohne Eintrag in Heizwarte.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       verdictLines, planRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
-      STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel
+      STEPPERS, stepValue, applyStep, parseElev, elevPatch, afterDelete, cleanLabel,
+      MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);

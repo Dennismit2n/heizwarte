@@ -936,6 +936,60 @@ test('Einstellungen: Öffnen setzt den Fokus auf die h2, beide Zurück führen a
   assert.match(funktion(appCode, 'onLanguage'), /if \(state\.screen === 's-settings'\) \{ renderSettings\(\); \}/);
 });
 
+test('Einstellungen: „Ort hinzufügen“ bleibt aktiv, errMaxPlaces steht als Alert-Zeile direkt darüber', () => {
+  const knopf = byId.get('btnAddPlace');
+  assert.ok(knopf, '#btnAddPlace');
+  assert.equal(knopf.name, 'button');
+  assert.equal(knopf.attrs['data-i18n'], 'btnAddPlace');
+  assert.equal(knopf.attrs.disabled, undefined, 'kein deaktivierter Knopf ohne Satz (Abschnitt 6)');
+  assert.equal(knopf.attrs['aria-disabled'], undefined);
+  const zeile = byId.get('settingsPlacesErr');
+  assert.ok(zeile, '#settingsPlacesErr');
+  assert.equal(zeile.name, 'div');
+  assert.equal(zeile.attrs.role, 'alert');
+  assert.equal(zeile.attrs.tabindex, '-1');
+  assert.match(html, /id="settingsPlacesErr"[^>]*><\/div>/, 'leer im Markup, app.js schreibt hinein');
+  // Reihenfolge im Block „Orte“: Liste mit „Löschen“, Alert-Zeile, „Ort hinzufügen“
+  const liste = html.indexOf('id="settingsPlaceList"');
+  assert.ok(liste >= 0 && liste < html.indexOf('id="settingsPlacesErr"'), 'die Ortsliste steht über der Alert-Zeile');
+  assert.ok(html.indexOf('id="settingsPlacesErr"') < html.indexOf('id="btnAddPlace"'), 'die Alert-Zeile steht direkt über dem Knopf');
+  assert.ok(screenSlice('s-settings').includes('id="btnAddPlace"'), 'der Knopf gehört in die Einstellungen');
+  assert.match(appCode, /on\('btnAddPlace', 'click', onAddPlace\);/);
+});
+
+test('Einstellungen: Ort hinzufügen beginnt den Nachtrag bei S2, bei fünf Orten zeigt ein Druck errMaxPlaces und der Fokus geht darauf', () => {
+  const add = funktion(appCode, 'onAddPlace');
+  assert.ok(add.includes('canAddPlace(state.places)'), 'die Regel steckt in der reinen Funktion');
+  assert.ok(add.includes('showSetup({ add: true })'), 'Nachtrag: Einrichtung ab S2');
+  assert.ok(add.includes("$('settingsPlacesErr').focus()"), 'der Fokus geht auf den Fehlertext');
+  const fehler = funktion(appCode, 'renderPlacesError');
+  assert.ok(fehler.includes("t('errMaxPlaces')") && fehler.includes('replaceChildren()'), 'der Satz wird erst im Moment des Drucks gesetzt');
+  // beim Neuzeichnen der Einstellungen (Öffnen, Löschen, Sprachwechsel) zieht die Zeile nach
+  assert.ok(funktion(appCode, 'renderSettings').includes('renderPlacesError'));
+  // der Nachtrag zählt wie die Adresse („Schritt 1 von 4“) und „Zurück“ auf S2 führt in die Einstellungen
+  assert.match(funktion(appCode, 'onAddrBack'), /if \(s\.add\) \{\s*state\.setup = null;\s*showScreen\('s-settings'\);/);
+  assert.ok(funktion(appCode, 'stepFor').includes('STEP_OF[s.way]'), 'der Zähler hängt am Weg, nicht am Nachtrag');
+  // der neue Ort wird bei „Ja“ in S4 aktiv; das Maximum gilt auch dort
+  const ja = funktion(appCode, 'onConfirmYes');
+  assert.ok(ja.includes('canAddPlace(state.places)') && ja.includes('appendPlace(state.places, place)'));
+  assert.ok(ja.includes("persist('active', place.id)") && ja.includes('state.activeId = place.id'));
+  assert.doesNotMatch(appCode, /state\.places\.push\(/, 'die Liste wächst nur über appendPlace');
+});
+
+test('Ortswechsel: Umschalter und Radio gehen beide über activatePlace (hw:active, Cache zeigen, refresh(true))', () => {
+  const wechsel = funktion(appCode, 'activatePlace');
+  assert.ok(wechsel.includes("persist('active', id)") && wechsel.includes('loadCache()') && wechsel.includes('refresh(true)'));
+  assert.ok(funktion(appCode, 'onPlaceChange').includes('activatePlace(id)'));
+  assert.ok(funktion(appCode, 'onPlacePick').includes('activatePlace(id)'));
+  assert.match(appCode, /on\('placeSelect', 'change', onPlaceChange\);/);
+  // späte Antwort eines anderen Orts: der Cache wird geschrieben, gerendert wird nur der aktive Ort
+  const fertig = funktion(appCode, 'onFetched');
+  assert.ok(fertig.includes("persist('cache:' + id, result.cache)"));
+  assert.ok(fertig.includes('if (id === state.activeId) {') && fertig.includes('refresh(false)'));
+  assert.ok(funktion(appCode, 'onFetchFailed').includes('if (id !== state.activeId) { return; }'));
+  assert.ok(funktion(appCode, 'onWait').includes('if (id !== state.activeId) { return; }'));
+});
+
 test('Einstellungen: jede ID der Stepper steht im Markup, alle Schlüssel der Stepper in de', () => {
   for (const feld of ['comfort', 'leadMin', 'leadMax']) {
     for (const id of [feld + 'Down', feld + 'Up', feld + 'Out']) { assert.ok(byId.has(id), '#' + id); }

@@ -9,7 +9,8 @@
  * kommen aus den deutschen Planschlüsseln in js/i18n.js (I18N.de), nicht abgeschrieben aus der Oberfläche.
  *
  * Fall 3 (Sprachen) läuft bis M4 nur auf Deutsch, weil es noch keine Sprachwahl gibt. Die Fälle 11 bis 17
- * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen) steht schon.
+ * kommen mit den Meilensteinen 3 und 5 dazu; Fall 12 (Heizart, Höhe, Stepper, Orte der Einstellungen) und Fall 17
+ * (mehrere Orte: Nachtrag, Umschalter, Wechsel während eines Abrufs, Maximum fünf) stehen schon.
  * Die Einstellungen sind außerdem die zehnte Stelle in walkScreens und damit in Fall 2, 3 und 5.
  */
 'use strict';
@@ -962,4 +963,279 @@ test('Fall 12: Ortsliste mit Name, Radio und Löschen mit Rückfrage; der einzig
   await expect(page.locator('#s-main')).toBeVisible();
   await expect(page.locator('#nowTemp')).toContainText('°');
   expect(await storedPlaces(page)).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Fall 17: mehrere Orte (Nachtrag aus den Einstellungen, Umschalter, Wechsel während eines Abrufs, Maximum fünf)
+// ---------------------------------------------------------------------------------------------
+
+// Aktiver Ort laut Speicher (hw:active) und der Cache eines Orts (hw:cache:<id>) als Objekt oder null
+function storedActive(page) {
+  return page.evaluate(() => JSON.parse(localStorage.getItem('hw:active') || 'null'));
+}
+
+function storedCache(page, id) {
+  return page.evaluate((key) => JSON.parse(localStorage.getItem('hw:cache:' + key) || 'null'), id);
+}
+
+// Wie oft die Forecast-Route für die Breite lat (round3, wie in der URL) getroffen wurde
+function forecastHits(net, lat) {
+  return net.log.forecast.filter((u) => u.includes('latitude=' + lat + '&')).length;
+}
+
+// Der Satz der Stufenzeile für Stufe n (levelOf mit dem Namen der Stufe)
+function levelLine(n) {
+  return deText('levelOf', { n, name: deText('level' + n) });
+}
+
+// Ein weiterer Ort über Einstellungen → „Ort hinzufügen“ bis zum Hauptbildschirm mit Daten des neuen Orts. fixture ist
+// die Photon-Antwort für die Suche (der Test wählt den ersten Treffer). Gibt die Ortsliste aus dem Speicher zurück.
+async function addPlaceByClicks(page, net, fixture) {
+  net.on.photon = (route) => answer(route, fixtureText(fixture));
+  await openSettings(page);
+  await page.locator('#btnAddPlace').click();
+  await expect(page.locator('#s-address')).toBeVisible();
+  await fillAddress(page);
+  await page.locator('#btnSearch').click();
+  await pickFirstHit(page);
+  await page.locator('#btnConfirmYes').click();
+  await expect(page.locator('#s-profile')).toBeVisible();
+  await page.locator('#btnDone').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#nowBody')).toBeVisible();
+  return storedPlaces(page);
+}
+
+test('Fall 17: zweiter Ort über „Ort hinzufügen“, Umschalter, Wechsel zurück auch innerhalb von 60 s, Löschen bis S1', async ({ page, errors }) => {
+  const net = await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+  const [a] = await storedPlaces(page);
+
+  // bei einem Ort steht nur sein Name da, kein Umschalter
+  await expect(page.locator('#placeName')).toHaveText(a.label);
+  await expect(page.locator('#placePick')).toBeHidden();
+
+  // Nachtrag: Einrichtung ab S2 mit dem Zähler „1 von 4“, „Zurück“ führt in die Einstellungen
+  await openSettings(page);
+  await expect(page.locator('#btnAddPlace')).toBeVisible();
+  await page.locator('#btnAddPlace').click();
+  await expect(page.locator('#s-address')).toBeVisible();
+  await expectFocusOnHeading(page, 's-address');
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 4 }));
+  await page.locator('#btnAddrBack').click();
+  await expect(page.locator('#s-settings')).toBeVisible();
+  await expectFocusOnHeading(page, 's-settings');
+  await expect(page.locator('#setupStep')).toHaveText('');
+  expect(await storedPlaces(page), 'abgebrochen: kein zweiter Ort').toHaveLength(1);
+
+  // und noch einmal bis zum Ende: Zähler 1, 2, 3, 4 von 4; der neue Ort ist nach „Ja“ in S4 gespeichert und aktiv
+  net.on.photon = (route) => answer(route, fixtureText('photon-ohne-nummer.json'));
+  await page.locator('#btnAddPlace').click();
+  await fillAddress(page);
+  await page.locator('#btnSearch').click();
+  await expect(page.locator('#s-hits')).toBeVisible();
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 2, of: 4 }));
+  await page.locator('#hitList .hit').first().click();
+  await expect(page.locator('#s-confirm')).toBeVisible();
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 3, of: 4 }));
+  await page.locator('#btnConfirmYes').click();
+  await expect(page.locator('#s-profile')).toBeVisible();
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 4, of: 4 }));
+  await expect.poll(async () => (await storedPlaces(page)).length).toBe(2);
+  const [, b] = await storedPlaces(page);
+  expect(await storedActive(page), 'der neue Ort ist aktiv').toBe(b.id);
+  await page.locator('#btnDone').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#nowBody')).toBeVisible();
+
+  // ab zwei Orten: sichtbares Label und natives Auswahlfeld statt des Namens, der neue Ort ist gewählt
+  await expect(page.locator('#placePick')).toBeVisible();
+  await expect(page.locator('#placeName')).toBeHidden();
+  await expect(page.locator('label[for="placeSelect"]')).toBeVisible();
+  await expect(page.locator('label[for="placeSelect"]')).toHaveText(deText('placeLabel'));
+  expect(await page.locator('#placeSelect').evaluate((el) => el.tagName)).toBe('SELECT');
+  await expect(page.locator('#placeSelect option')).toHaveText([a.label, b.label]);
+  await expect(page.locator('#placeSelect')).toHaveValue(b.id);
+  // je Ort ein Cache (M3-DoD 2): zwei Schlüssel hw:cache:<id>
+  await expect.poll(async () => (await storedCache(page, a.id)) !== null && (await storedCache(page, b.id)) !== null).toBe(true);
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('hw:cache:')).sort());
+  expect(keys).toEqual(['hw:cache:' + a.id, 'hw:cache:' + b.id].sort());
+
+  // Umschalten auf den ersten Ort ruft die Forecast-Route erneut ab, auch innerhalb von 60 s (refresh(true))
+  const hits = net.count('forecast');
+  await page.locator('#placeSelect').selectOption(a.id);
+  await expect.poll(() => net.count('forecast')).toBe(hits + 1);
+  expect(await storedActive(page)).toBe(a.id);
+  await expect(page.locator('#placeSelect')).toHaveValue(a.id);
+  await expect(page.locator('#reload')).not.toHaveAttribute('aria-disabled', 'true');
+
+  // dasselbe mit dem Radio „Diesen Ort anzeigen“ in den Einstellungen
+  await openSettings(page);
+  const items = page.locator('#settingsPlaceList > li');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0).locator('input[type=radio]')).toBeChecked();
+  await expect(items.nth(1).locator('input[type=radio]')).not.toBeChecked();
+  await expect(items.nth(1).locator('.choice')).toContainText(deText('settingsPlaceActive'));
+  const hitsRadio = net.count('forecast');
+  await items.nth(1).locator('.choice').click();
+  await expect(items.nth(1).locator('input[type=radio]')).toBeChecked();
+  await expect.poll(() => net.count('forecast')).toBe(hitsRadio + 1);
+  expect(await storedActive(page)).toBe(b.id);
+  await page.locator('#btnSettingsBack').click();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#placeSelect')).toHaveValue(b.id);
+
+  // Löschen des aktiven Orts: der andere rückt nach (hw:active), sein Cache geht mit, der Cache des Nachrückers bleibt
+  await openSettings(page);
+  await items.nth(1).getByRole('button', { name: deText('btnDelete'), exact: true }).click();
+  await items.nth(1).getByRole('button', { name: deText('settingsDeleteConfirm', { name: b.label }), exact: true }).click();
+  await expect(items).toHaveCount(1);
+  expect(await storedActive(page), 'der übrige Ort ist aktiv').toBe(a.id);
+  expect(await storedCache(page, b.id), 'der Cache des gelöschten Orts geht mit').toBeNull();
+  expect(await storedCache(page, a.id)).not.toBeNull();
+  await expect(items.first().locator('input[type=radio]')).toBeChecked();
+  await page.locator('#btnSettingsBack').click();
+  await expect(page.locator('#placePick')).toBeHidden();
+  await expect(page.locator('#placeName')).toHaveText(a.label);
+
+  // der einzige verbliebene Ort: settingsDeleteLast, danach S1
+  await openSettings(page);
+  await items.first().getByRole('button', { name: deText('btnDelete'), exact: true }).click();
+  await items.first().getByRole('button', { name: deText('settingsDeleteLast', { name: a.label }), exact: true }).click();
+  await expect(page.locator('#s-welcome')).toBeVisible();
+  expect(await storedPlaces(page)).toEqual([]);
+  expect(errors.console, 'console.error').toEqual([]);
+});
+
+test('Fall 17: Wechsel während eines Abrufs zeigt nie die Daten des alten Orts unter dem Namen des neuen', async ({ page, errors }) => {
+  const net = await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+  const [a] = await storedPlaces(page);
+  const [, b] = await addPlaceByClicks(page, net, 'photon-ohne-nummer.json');
+  expect(a.lat, 'Ort A liegt bei 48.877').toBe(48.877);
+  expect(b.lat, 'Ort B liegt bei 48.882 (round3 von 48.8817501)').toBe(48.882);
+
+  // A liefert Frost (Stufe 2), B milde Nächte (Stufe 0); die Antwort für A hält der Handler zurück, bis der Test sie freigibt
+  let hold = false;
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  net.on.forecast = async (route) => {
+    if (route.request().url().includes('latitude=48.882&')) { return answer(route, fixtureText('om-mild.json')); }
+    if (hold) { await gate; }
+    return answer(route, fixtureText('om-frost.json'));
+  };
+  await expect.poll(async () => (await storedCache(page, a.id)) !== null).toBe(true);
+  const fetchedBefore = (await storedCache(page, a.id)).fetched;
+  const hitsA = forecastHits(net, 48.877);
+  const hitsB = forecastHits(net, 48.882);
+  hold = true;
+
+  // auf A umschalten: der Abruf für A läuft und hängt
+  await page.locator('#placeSelect').selectOption(a.id);
+  await expect.poll(() => forecastHits(net, 48.877)).toBe(hitsA + 1);
+  await expect(page.locator('#reload')).toHaveAttribute('aria-disabled', 'true');
+
+  // währenddessen auf B umschalten: die Forecast-Route wird für B getroffen, B hängt sich nicht an den Abruf von A
+  await page.locator('#placeSelect').selectOption(b.id);
+  await expect.poll(() => forecastHits(net, 48.882)).toBe(hitsB + 1);
+  await expect(page.locator('#placeSelect')).toHaveValue(b.id);
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(0));
+  await expect(page.locator('#reload')).not.toHaveAttribute('aria-disabled', 'true');
+  const hitsAfterB = net.count('forecast');
+
+  // jetzt die späte Antwort für A freigeben (die Seitenuhr läuft vorher ein Stück weiter, damit „fetched“ später liegt)
+  await page.clock.runFor(2000);
+  release();
+  await expect.poll(async () => (await storedCache(page, a.id)).fetched, { message: 'die späte Antwort schreibt hw:cache:<id von A>' })
+    .toBeGreaterThan(fetchedBefore);
+  await settle(page);
+
+  // angezeigt wird weiter nur B: Name, Stufe 0 aus B’s Daten, nie die Stufe 2 von A; kein Doppelabruf, B bleibt aktiv
+  await expect(page.locator('#placeSelect')).toHaveValue(b.id);
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(0));
+  await expect(page.locator('#verdictTitle')).not.toHaveText(levelLine(2));
+  expect(await storedActive(page)).toBe(b.id);
+  expect(net.count('forecast'), 'kein zusätzlicher Abruf durch die späte Antwort').toBe(hitsAfterB);
+
+  // und auf A gewechselt, steht der geschriebene Stand sofort da (Stufe 2)
+  hold = false;
+  await page.locator('#placeSelect').selectOption(a.id);
+  await expect(page.locator('#verdictTitle')).toHaveText(levelLine(2));
+  expect(errors.console, 'console.error').toEqual([]);
+});
+
+// Fünf Orte vorab im Speicher (Format nach BAUPLAN Abschnitt 4), bevor die App startet
+function seedPlaces(page, count) {
+  return page.addInitScript((n) => {
+    try {
+      if (localStorage.getItem('hw:v') !== null) { return; }
+      const places = [];
+      for (let i = 0; i < n; i++) {
+        places.push({
+          id: 'ort0000' + i, label: 'Ort ' + (i + 1), lat: 48.8 + i / 100, lon: 9.4, elev: 300, elevAuto: true, cc: 'DE', tz: null,
+          heat: { type: 'radiator', leadMin: 0.5, leadMax: 2, comfort: 20, thresh: null, confirmed: true }, created: 1
+        });
+        localStorage.setItem('hw:cache:ort0000' + i, JSON.stringify({ v: 2, fetched: 1, om: {} }));
+      }
+      localStorage.setItem('hw:v', '2');
+      localStorage.setItem('hw:places', JSON.stringify(places));
+      localStorage.setItem('hw:active', JSON.stringify('ort00000'));
+    } catch (e) {
+      // ohne Speicher gibt es keinen Seed; der Test fiele dann an seinen Erwartungen auf
+    }
+  }, count);
+}
+
+test('Fall 17: bei fünf Orten zeigt „Ort hinzufügen“ errMaxPlaces, nach dem Löschen eines Orts geht es wieder', async ({ page }) => {
+  const net = await mockNet(page);
+  await seedPlaces(page, 5);
+  await startClock(page);
+  await page.goto('/');
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('#nowBody')).toBeVisible();
+  await expect(page.locator('#placeSelect option')).toHaveCount(5);
+  expect(net.count('forecast'), 'nur der aktive Ort wird abgerufen').toBe(1);
+
+  await openSettings(page);
+  const items = page.locator('#settingsPlaceList > li');
+  await expect(items).toHaveCount(5);
+  const add = page.locator('#btnAddPlace');
+  const err = page.locator('#settingsPlacesErr');
+  await expect(err).toBeEmpty();
+
+  // der Knopf bleibt aktiv; ein Druck zeigt den Satz in der Alert-Zeile über dem Knopf, der Fokus geht darauf
+  await expect(add).not.toHaveAttribute('aria-disabled', 'true');
+  expect(await add.evaluate((el) => el.disabled)).toBe(false);
+  await add.click();
+  await expect(err).toHaveText(deText('errMaxPlaces'));
+  await expect(err).toHaveAttribute('role', 'alert');
+  await expect(err).toBeFocused();
+  await expect(page.locator('#s-address')).toBeHidden();
+  const above = await page.evaluate(() => {
+    const e = document.getElementById('settingsPlacesErr').getBoundingClientRect();
+    const b = document.getElementById('btnAddPlace').getBoundingClientRect();
+    return e.bottom <= b.top;
+  });
+  expect(above, 'die Alert-Zeile steht über dem Knopf').toBe(true);
+  expect(await storedPlaces(page)).toHaveLength(5);
+
+  // ein zweiter Druck setzt den Satz nicht doppelt
+  await add.click();
+  await expect(err.locator('p')).toHaveCount(1);
+
+  // die Ortsliste mit „Löschen“ steht darüber; ein nicht aktiver Ort weg: Satz weg, Cache weg, der aktive Ort bleibt
+  expect(await storedCache(page, 'ort00002')).not.toBeNull();
+  await items.nth(2).getByRole('button', { name: deText('btnDelete'), exact: true }).click();
+  await items.nth(2).getByRole('button', { name: deText('settingsDeleteConfirm', { name: 'Ort 3' }), exact: true }).click();
+  await expect(items).toHaveCount(4);
+  await expect(err).toBeEmpty();
+  expect(await storedCache(page, 'ort00002')).toBeNull();
+  expect(await storedActive(page)).toBe('ort00000');
+
+  // jetzt geht es wieder: Einrichtung ab S2, Zähler „1 von 4“
+  await add.click();
+  await expect(page.locator('#s-address')).toBeVisible();
+  await expect(page.locator('#setupStep')).toHaveText(deText('setupStep', { n: 1, of: 4 }));
 });
