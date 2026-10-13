@@ -29,7 +29,7 @@ const SCHLUESSEL = {
   Einrichtung: 'setupIntro setupPrivacy setupByAddress setupByLocation setupStep{n,of} setupAddressTitle setupStreet setupStreetHint setupZip setupCity setupSearch setupSearching setupHitsTitle setupHitsHint setupNoNumber setupNoneFits setupConfirmTitle setupConfirmQuestion setupConfirmYes setupConfirmNo setupRegion{region} setupExtent{w,h} setupExtentKm{w,h} setupCoords{lat,lon} setupElev{m} setupElevAuto setupElevLoading setupElevUnknown setupElevHint setupElevLabel setupLabel setupMyPlace setupGeoWrong setupHeatTitle setupHeatHint setupHeatDontKnow setupHeatDefaultHint hitHouse hitStreet hitPlace hitPoi',
   Fehler: 'errNeedPlace errNoHit errNoHitTip1 errNoHitTip2 errOfflineSearch errSearchRejected errGeoDenied errGeoFailed errElev errElevRange errMaxPlaces errTooOld errLoadFailed',
   Heizarten: 'profileRadiator profileFloorScreed profileFloorDry profileHeatpumpFloor profileStorage profileHintRadiator profileHintFloorScreed profileHintFloorDry profileHintHeatpumpFloor profileHintStorage profileRule',
-  Ampel: 'level0 level1 level2 level3 levelOf{n,name} levelTitle0 levelTitle1{when} levelTitle2{when} levelTitle3{when} levelText0 levelText1{onset,lead} levelText2{onset,lead} levelText3{onset,lead} levelNoData reasonNightMin{t} reasonDrop48{k} reasonColdWindy reasonFrost reasonGtRise{kd} reasonAlert reasonCalmNights{t} reasonNoJumps',
+  Ampel: 'level0 level1 level2 level3 levelOf{n,name} levelTitle0 levelTitle1{when} levelTitle2{when} levelTitle3{when} levelText0 levelText1{onset,lead} levelText2{onset,lead} levelText3{onset,lead} levelTextPast{onset,lead} levelNoData reasonNightMin{t} reasonDrop48{k} reasonColdWindy reasonFrost reasonGtRise{kd} reasonAlert reasonCalmNights{t} reasonNoJumps',
   Fahrplan: 'planTitle planFor{profile} planTitleStorage planNightOf{day} planStart{time} planToday{time} planDay{day,time} planNow planDue planOptional planDisagree{t} planGusty planNightMin{t,time} planLead{onset,lead} planChargeEvening{level} strengthThrough strengthUp strengthNormal strengthLow chargeTonight{level} chargeHigh chargeUp chargeNormal chargeLow',
   'Jetzt, Tage': 'nowTitle nowFeels{t} nowWind{kmh} nowHumidity{p} nowNightMin{t,time} daysTitle dayToday dayTomorrow dayMin{t} dayMax{t} dayRain{mm} daySun{h} dayGust{kmh} dayColder{k} dayWarmer{k} daySame',
   'Kurve, Lüften': 'chartTitle chartLegendIcon chartLegendMos{station,height} chartLegendRain chartNow chartTipRain{p} chartTipDew{t} chartTipMos{t} chartSummary{min,minWhen,max,maxWhen} chartMosFar airTitle airLabel airNone airNote{dew,comfort} airBest airSlot{time}',
@@ -109,7 +109,7 @@ test('Stufe M1: I18N enthält genau den Block de, LANGS die 14 Sprachen der Star
 test('Block de hat genau die Schlüssel der Tabelle im Plan, nicht mehr und nicht weniger', () => {
   const vorhanden = Object.keys(de).filter((k) => k !== '_name').sort();
   const soll = Object.keys(ERWARTET).sort();
-  assert.equal(soll.length, 256);
+  assert.equal(soll.length, 257);
   assert.deepEqual(soll.filter((k) => !vorhanden.includes(k)), [], 'fehlt in de');
   assert.deepEqual(vorhanden.filter((k) => !soll.includes(k)), [], 'steht in de, aber nicht in der Tabelle');
 });

@@ -146,6 +146,9 @@
       levelText1: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
       levelText2: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
       levelText3: 'Abkühlung setzt gegen {onset} ein. Bei {lead} h Aufheizzeit musst du vorher starten.',
+      // Ersetzt levelText1–3, sobald die Abkühlung schon begonnen hat (onset liegt vor „jetzt“): „setzt ein“ und
+      // „vorher starten“ wären dann falsch (Handy-Probe 12.10.2026, 21:53 Uhr bei Abkühlung ab 20:00)
+      levelTextPast: 'Abkühlung hat gegen {onset} eingesetzt. Bei {lead} h Aufheizzeit solltest du nicht länger warten.',
       levelNoData: 'Keine Empfehlung möglich – es fehlen aktuelle Wetterdaten.',
       reasonNightMin: 'Die Nacht wird kalt: bis {t}.',
       // {k} ist der Betrag ohne Vorzeichen
