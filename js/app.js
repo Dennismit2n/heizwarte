@@ -1447,10 +1447,13 @@
   //   fmt.when(entry)    Satzteil für levelTitle1–3 („jetzt“, „heute ab 15:00“, „Dienstag ab 15:00“)
   //   fmt.time(ms)       Uhrzeit in der Ortszeit des Orts
   //   fmt.num(x)         Zahl mit höchstens einer Nachkommastelle
+  //   fmt.onsetPassed(entry)  hat die Abkühlung schon begonnen (onsetMs <= jetzt)? Optional; ohne sie gilt „nein“
   // Stufe 0 gilt für jede Heizart gleich (levelTitle0, levelText0). Ab Stufe 1 steht beim Nachtspeicher
   // chargeTonight{level} statt levelTitle1–3, und levelText1–3 entfällt: Der Satz nennt „{lead} h
   // Aufheizzeit“, und der Nachtspeicher hat keine. Ab Stufe 1 ohne Fahrplaneintrag bleiben beide Zeilen leer (sie
   // werden verborgen, die Stufe steht in der <h2>); der Satz von Stufe 0 widerspräche der Überschrift.
+  // Liegt der Beginn der Abkühlung schon hinter „jetzt“, steht statt levelText1–3 der Satz levelTextPast:
+  // „Abkühlung setzt gegen 20:00 ein … vorher starten“ wäre um 21:53 falsch (Handy-Probe 12.10.2026).
   function verdictLines(level, entry, place, fmt) {
     if (level === 0) { return { action: fmt.t(TITLE_KEYS[0]), body: fmt.t(TEXT_KEYS[0]) }; }
     if (!entry) { return { action: '', body: '' }; }
@@ -1458,9 +1461,10 @@
       const action = entry.charge ? fmt.t('chargeTonight', { level: fmt.t(CHARGE_KEY[entry.charge]) }) : '';
       return { action, body: '' };
     }
+    const past = typeof fmt.onsetPassed === 'function' && fmt.onsetPassed(entry) === true;
     return {
       action: fmt.t(TITLE_KEYS[level], { when: fmt.when(entry) }),
-      body: fmt.t(TEXT_KEYS[level], { onset: fmt.time(entry.onsetMs), lead: fmt.num(entry.lead) })
+      body: fmt.t(past ? 'levelTextPast' : TEXT_KEYS[level], { onset: fmt.time(entry.onsetMs), lead: fmt.num(entry.lead) })
     };
   }
 
@@ -1473,7 +1477,8 @@
       t,
       when: (entry) => whenPhrase(view, entry, zt),
       time: (ms) => f.time(ms, tz),
-      num: numAuto
+      num: numAuto,
+      onsetPassed: (entry) => isNum(entry.onsetMs) && entry.onsetMs <= view.now.ms
     };
   }
 

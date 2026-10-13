@@ -338,6 +338,39 @@ test('verdictLines Fußbodenheizung: levelTitle mit Satzteil und levelText mit A
   assert.doesNotMatch(out.action, /Aufladung/);
 });
 
+test('verdictLines: hat die Abkühlung schon begonnen, steht levelTextPast statt „setzt ein … vorher starten“ (Handy-Probe 12.10.2026)', () => {
+  const view = viewOf('om-frost.json', PROF.floorScreed);
+  const e = view.v.plan[0];
+  const vars = { onset: i18n.fmt.time(e.onsetMs, view.m.tz), lead: roundedNum(e.lead) };
+  for (const level of [1, 2, 3]) {
+    // Abkühlung liegt hinter „jetzt“: der Satz steht in der Vergangenheit und nennt dieselbe Uhrzeit und Aufheizzeit
+    const spaet = verdictLines(level, e, placeOf(PROF.floorScreed), fmtFor(view, { onsetPassed: () => true }).fmt);
+    assert.equal(spaet.body, i18n.t('levelTextPast', vars), 'Stufe ' + level);
+    assert.match(spaet.body, /^Abkühlung hat gegen \d{1,2}:\d{2} eingesetzt\. Bei \d(,\d)? h Aufheizzeit /, 'Stufe ' + level);
+    assert.equal(spaet.action, i18n.t(['levelTitle0', 'levelTitle1', 'levelTitle2', 'levelTitle3'][level], { when: 'ZEIT' }), 'Stufe ' + level + ': Handlungssatz unverändert');
+    // Abkühlung steht noch bevor, oder fmt kennt onsetPassed nicht (ältere Aufrufer): der bisherige Satz
+    const vorher = verdictLines(level, e, placeOf(PROF.floorScreed), fmtFor(view, { onsetPassed: () => false }).fmt);
+    assert.equal(vorher.body, i18n.t('levelText' + level, vars), 'Stufe ' + level + ' vorher');
+    const ohne = verdictLines(level, e, placeOf(PROF.floorScreed), fmtFor(view).fmt);
+    assert.equal(ohne.body, i18n.t('levelText' + level, vars), 'Stufe ' + level + ' ohne onsetPassed');
+  }
+  // Nachtspeicher bleibt ohne Aufheizzeit-Satz, auch wenn die Abkühlung begonnen hat
+  const speicher = verdictLines(2, Object.assign({}, e, { startMs: null, charge: 'up' }), placeOf(PROF.storage), fmtFor(view, { onsetPassed: () => true }).fmt);
+  assert.equal(speicher.body, '');
+});
+
+test('Verdrahtung: verdictFmt reicht onsetPassed aus view.now an verdictLines, und nur dort entscheidet es über levelTextPast', () => {
+  // verdictFmt läuft erst nach init() (i18n wird dort gebunden), deshalb statisch am Quelltext wie in markup.test.js
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
+  const start = code.indexOf('function verdictFmt(view)');
+  assert.ok(start > 0, 'verdictFmt fehlt');
+  const block = code.slice(start, code.indexOf('\n  }\n', start));
+  assert.match(block, /onsetPassed: \(entry\) => isNum\(entry\.onsetMs\) && entry\.onsetMs <= view\.now\.ms/, 'onsetPassed vergleicht onsetMs mit „jetzt“ der Seite');
+  assert.match(code, /const past = typeof fmt\.onsetPassed === 'function' && fmt\.onsetPassed\(entry\) === true;/, 'verdictLines fragt onsetPassed nur, wenn das Bündel es hat');
+  assert.match(code, /fmt\.t\(past \? 'levelTextPast' : TEXT_KEYS\[level\]/, 'levelTextPast ersetzt levelText1–3 genau dann');
+  assert.equal((code.match(/levelTextPast/g) || []).length, 2, 'levelTextPast steht in app.js nur in verdictLines und seinem Kommentar');
+});
+
 test('verdictLines: Aufheizzeit 1 heißt „1 h“, nie „1 Stunden“ (Heizkörper, Trockenbau; alle drei Stufen gleich)', () => {
   const view = viewOf('om-frost.json', PROF.radiator);
   const { fmt } = fmtFor(view);
