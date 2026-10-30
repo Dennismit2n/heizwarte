@@ -1119,7 +1119,14 @@ test('Einstellungen: Höhe mit Anzeige, Ändern-Knopf und Feld nach den Regeln v
 });
 
 test('Einstellungen: Löschen mit Rückfrage als zweiter Knopf, ohne confirm(); der letzte Ort führt zu S1', () => {
-  assert.doesNotMatch(appCode, /\bconfirm\s*\(|\balert\s*\(|\bprompt\s*\(/, 'keine Browser-Dialoge');
+  // Nur die Browser-Dialoge selbst. prompt() am beforeinstallprompt-Ereignis öffnet den Installationsdialog
+  // des Knopfs „Installieren“ und ist erlaubt (Nachtrag 30.10.2026); die Proben halten beide Richtungen fest.
+  const dialog = /(?<![\w$.])(?:confirm|alert|prompt)\s*\(|\b(?:window|root|self|globalThis)\.(?:confirm|alert|prompt)\s*\(/;
+  for (const probe of ['confirm(x)', 'alert(x)', 'prompt(x)', 'window.confirm(x)', 'root.prompt(x)']) {
+    assert.match(probe, dialog, probe + ' muss auffallen');
+  }
+  assert.doesNotMatch('evt.prompt()', dialog);
+  assert.doesNotMatch(appCode, dialog, 'keine Browser-Dialoge');
   const item = funktion(appCode, 'placeItem');
   assert.ok(item.includes("t('btnDelete')") && item.includes("t('btnCancel')"));
   assert.ok(item.includes("t('settingsDeleteLast', { name: p.label })") && item.includes("t('settingsDeleteConfirm', { name: p.label })"));
