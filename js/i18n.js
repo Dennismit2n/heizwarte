@@ -44,6 +44,7 @@
       btnAddPlace: 'Ort hinzufügen',
       btnCancel: 'Abbrechen',
       btnCityOnly: 'Nur den Ort suchen',
+      btnInstall: 'Installieren',
 
       // --- Status (nur statusStamp und statusWaiting tragen Platzhalter) ---
       statusLoading: 'Wird aktualisiert …',

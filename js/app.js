@@ -2728,6 +2728,38 @@
     navigator.serviceWorker.register('./sw.js').catch(console.error);
   }
 
+  // Knopf „Installieren“ (Nachtrag 30.10.2026, Dennis' Wunsch für alle Werkstatt-PWAs): boot.js hebt
+  // beforeinstallprompt auf, weil es vor app.js kommen kann. Der Knopf erscheint erst dann, öffnet den
+  // Installationsdialog des Browsers und fehlt in der installierten App. Ein Ereignis reicht für einen Dialog;
+  // nach einem Abbruch kommt der Knopf wieder, sobald der Browser ein neues schickt.
+  function installable() {
+    const standalone = (typeof root.matchMedia === 'function' && root.matchMedia('(display-mode: standalone)').matches) ||
+      (typeof navigator !== 'undefined' && navigator.standalone === true);
+    return Boolean(root.deferredInstall) && !standalone;
+  }
+
+  function renderInstall() {
+    $('btnInstall').hidden = !installable();
+  }
+
+  function onInstall() {
+    const evt = root.deferredInstall;
+    root.deferredInstall = null;
+    renderInstall();
+    if (!evt) { return; }
+    // nie stumm (Hausregel): ein abgelehnter oder fehlender Dialog landet als Warnung in der Konsole
+    try { Promise.resolve(evt.prompt()).catch(console.warn); } catch (e) { console.warn(e); }
+  }
+
+  function wireInstall() {
+    root.onInstallReady = renderInstall;
+    on('btnInstall', 'click', onInstall);
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('appinstalled', () => { root.deferredInstall = null; renderInstall(); });
+    }
+    renderInstall();
+  }
+
   function init() {
     const H = root.Heizwarte || {};
     storage = H.storage;
@@ -2769,6 +2801,7 @@
     document.addEventListener('visibilitychange', onVisible);
     // Größenänderung: nur die Kurve passt sich an (entprellt, onResize)
     if (typeof root.addEventListener === 'function') { root.addEventListener('resize', onResize); }
+    wireInstall();
     registerWorker();
   }
 

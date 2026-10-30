@@ -282,6 +282,16 @@ header {
   margin-bottom: 1.25rem;
 }
 
+/* Kopfzeile: Name links, rechts daneben „Installieren“ (Nachtrag 30.10.2026). Der Knopf erscheint erst,
+   wenn der Browser die Installation anbietet (app.js, renderInstall), und fehlt in der installierten App. */
+.headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
 /* Hinweise zum Speicher: der Satz trägt die Bedeutung, der Rahmen nur die Auffälligkeit */
 .notes p {
   margin-top: 0.5rem;

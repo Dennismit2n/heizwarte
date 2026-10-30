@@ -24,7 +24,7 @@ const ROOT = path.join(__dirname, '..');
 // Schlüsseltabelle aus BAUPLAN Abschnitt 5 i18n, samt Platzhaltern in geschweiften Klammern.
 // Neuer Schlüssel im Code heißt: hier ergänzen UND in js/i18n.js einen deutschen Text setzen.
 const SCHLUESSEL = {
-  'App, Knöpfe': 'appName appClaim placeLabel btnReload btnReloading btnMore btnLess btnSettings btnBack btnNext btnDone btnRetry btnChange btnUse btnDelete btnAddPlace btnCancel btnCityOnly',
+  'App, Knöpfe': 'appName appClaim placeLabel btnReload btnReloading btnMore btnLess btnSettings btnBack btnNext btnDone btnRetry btnChange btnUse btnDelete btnAddPlace btnCancel btnCityOnly btnInstall',
   Status: 'statusLoading statusStamp{when,ago} statusStale statusOffline statusNoData statusWaiting{s} statusRateLimited storageBlocked storageFull storeNewer',
   Einrichtung: 'setupIntro setupPrivacy setupByAddress setupByLocation setupStep{n,of} setupAddressTitle setupStreet setupStreetHint setupZip setupCity setupSearch setupSearching setupHitsTitle setupHitsHint setupNoNumber setupNoneFits setupConfirmTitle setupConfirmQuestion setupConfirmYes setupConfirmNo setupRegion{region} setupExtent{w,h} setupExtentKm{w,h} setupCoords{lat,lon} setupElev{m} setupElevAuto setupElevLoading setupElevUnknown setupElevHint setupElevLabel setupLabel setupMyPlace setupGeoWrong setupHeatTitle setupHeatHint setupHeatDontKnow setupHeatDefaultHint hitHouse hitStreet hitPlace hitPoi',
   Fehler: 'errNeedPlace errNoHit errNoHitTip1 errNoHitTip2 errOfflineSearch errSearchRejected errGeoDenied errGeoFailed errElev errElevRange errMaxPlaces errTooOld errLoadFailed',
@@ -109,7 +109,7 @@ test('Stufe M1: I18N enthält genau den Block de, LANGS die 14 Sprachen der Star
 test('Block de hat genau die Schlüssel der Tabelle im Plan, nicht mehr und nicht weniger', () => {
   const vorhanden = Object.keys(de).filter((k) => k !== '_name').sort();
   const soll = Object.keys(ERWARTET).sort();
-  assert.equal(soll.length, 257);
+  assert.equal(soll.length, 258);
   assert.deepEqual(soll.filter((k) => !vorhanden.includes(k)), [], 'fehlt in de');
   assert.deepEqual(vorhanden.filter((k) => !soll.includes(k)), [], 'steht in de, aber nicht in der Tabelle');
 });

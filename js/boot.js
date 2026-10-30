@@ -23,3 +23,14 @@
     // gesperrter Speicher, kein JSON oder kein DOM: dann gilt „System“, wie index.html es trägt
   }
 })();
+
+// Knopf „Installieren“ (Nachtrag 30.10.2026): Chrome, Edge und Samsung Internet melden die Installierbarkeit
+// mit beforeinstallprompt, manchmal bevor app.js läuft. Das Ereignis bleibt hier liegen, bis app.js es abholt
+// (renderInstall); ohne DOM (Node) passiert nichts.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    window.deferredInstall = e;
+    if (typeof window.onInstallReady === 'function') { window.onInstallReady(); }
+  });
+}
