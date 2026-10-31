@@ -1,5 +1,5 @@
 /*
- * Tests für js/i18n.js, Stufe M1 (BAUPLAN Abschnitt 12): nur der Block de, vollständig; Platzhalter-
+ * Tests für js/i18n.js, Stufe M4 (BAUPLAN Abschnitt 12): 14 Blöcke mit gleichen Schlüsseln und Platzhaltern; Platzhalter-
  * und Hausstil-Regeln; Spracherkennung; apply() mit einem Papier-DOM; die Intl-Helfer unter
  * ausdrücklicher Zeitzone (deshalb für jede Prozess-TZ gleich); kein fester Text im Code (E:63).
  *
@@ -63,13 +63,15 @@ const Z = bei(13, 10, 0);                  // Dienstag, 13.01.2026, 10:00 Berlin
 const JETZT = bei(13, 23, 30);             // 23:30 Berlin, kurz vor Mitternacht
 const BERLIN = 'Europe/Berlin';
 
-// Block kurz einhängen, damit Pfade prüfbar sind, die es erst ab M4 wirklich gibt; danach wieder entfernen
+// Einen Block kurz durch einen fast leeren Prüfblock ersetzen (Rückfall auf de prüfen), danach den echten
+// Block an derselben Stelle wiederherstellen
 function mitBlock(code, fn) {
+  const echt = I18N[code];
   I18N[code] = { _name: 'Test ' + code };
   try {
     return fn();
   } finally {
-    delete I18N[code];
+    if (echt) { I18N[code] = echt; } else { delete I18N[code]; }
     i18n.apply('de', { document: fakeDocument([]), storage: fakeStorage() });
   }
 }
@@ -100,10 +102,46 @@ function fakeDocument(elements) {
 // Block de
 // ---------------------------------------------------------------------------------------------
 
-test('Stufe M1: I18N enthält genau den Block de, LANGS die 14 Sprachen der Startseite', () => {
-  assert.deepEqual(Object.keys(I18N), ['de']);
-  assert.equal(de._name, 'Deutsch');
+test('Stufe M4: I18N hat die 14 Blöcke in der Reihenfolge der Startseite, LANGS dieselben 14', () => {
   assert.deepEqual(LANGS, ['de', 'en', 'es', 'fr', 'it', 'nl', 'pl', 'pt', 'tr', 'ru', 'hi', 'zh', 'ja', 'ko']);
+  assert.deepEqual(Object.keys(I18N), LANGS);
+  assert.equal(de._name, 'Deutsch');
+});
+
+test('Stufe M4: jeder Block hat genau die Schlüssel von de in derselben Reihenfolge, dieselben Platzhalter, nichts leer', () => {
+  const soll = Object.keys(de);
+  for (const code of LANGS) {
+    const b = I18N[code];
+    assert.deepEqual(Object.keys(b), soll, code + ': Schlüssel und Reihenfolge wie de');
+    for (const k of soll) {
+      assert.equal(typeof b[k], 'string', code + '.' + k + ' ist kein Text');
+      assert.notEqual(b[k].trim(), '', code + '.' + k + ' ist leer');
+      assert.deepEqual(platzhalter(b[k]), platzhalter(de[k]), code + '.' + k + ': Platzhalter wie de');
+      assert.equal(b[k].replace(/\{\w+\}/g, '').match(/[{}]/), null, 'lose Klammer in ' + code + '.' + k);
+    }
+  }
+});
+
+// Was in einer anderen Sprache wörtlich wie de heißen darf: der Name der App und Wörter, die dort gleich lauten
+const GLEICH_WIE_DE = new Set(['appName', 'chargeNormal', 'nowWind', 'themeSystem', 'nl.statusStamp', 'nl.dayTomorrow',
+  'nl.dayRain', 'nl.wmo63']);
+
+test('Stufe M4: Hausstil in allen Blöcken, kein Text fällt wörtlich auf Deutsch zurück', () => {
+  for (const code of LANGS) {
+    for (const [k, v] of Object.entries(I18N[code])) {
+      assert.ok(!v.includes('\''), code + '.' + k + ' enthält ein gerades Apostroph');
+      assert.ok(!/[–—]/.test(v), code + '.' + k + ' enthält einen Gedankenstrich');
+      assert.ok(!v.includes(';'), code + '.' + k + ' enthält ein Semikolon');
+      assert.ok(!/\s-\s/.test(v), code + '.' + k + ' enthält einen Bindestrich mit Leerzeichen');
+      assert.equal(v, v.trim(), code + '.' + k + ' hat Leerraum am Rand');
+      assert.ok(!/ {2}/.test(v), code + '.' + k + ' hat doppelte Leerzeichen');
+      assert.ok(!v.includes('...'), code + '.' + k + ' enthält drei Punkte statt …');
+    }
+    if (code === 'de') { continue; }
+    const deutsch = Object.keys(de).filter((k) => k !== '_name' && I18N[code][k] === de[k] && /\p{L}{3,}/u.test(de[k]) &&
+      !GLEICH_WIE_DE.has(k) && !GLEICH_WIE_DE.has(code + '.' + k));
+    assert.deepEqual(deutsch, [], code + ': wörtlich wie de');
+  }
 });
 
 test('Block de hat genau die Schlüssel der Tabelle im Plan, nicht mehr und nicht weniger', () => {
@@ -234,11 +272,11 @@ test('Platzhalter zusammengesetzter Sätze: Handlungssatz der Ampel', () => {
 // ---------------------------------------------------------------------------------------------
 
 test('detect: ohne Block für die Browsersprache oder das Gespeicherte gilt de', () => {
-  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'pl'] }), 'de');
-  assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"fr"' }), languages: ['sv'] }), 'de', 'gespeichertes fr ohne Block zählt nicht');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'da'] }), 'de');
+  assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"sv"' }), languages: ['sv'] }), 'de', 'gespeichertes sv ohne Block zählt nicht');
   assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"de"' }), languages: ['sv'] }), 'de');
   assert.equal(i18n.detect({ storage: fakeStorage(), languages: [] }), 'de');
-  assert.equal(i18n.detect({ storage: null, languages: ['en-US'] }), 'de');
+  assert.equal(i18n.detect({ storage: null, languages: ['en-US'] }), 'en', 'seit M4 hat en einen Block');
 });
 
 test('detect: werfender Speicher, Müll und geerbte Namen ergeben ohne Wurf de', () => {
@@ -251,15 +289,15 @@ test('detect: werfender Speicher, Müll und geerbte Namen ergeben ohne Wurf de',
   assert.equal(i18n.detect({ storage: fakeStorage(), languages: [null, undefined, 42, {}, 'constructor'] }), 'de');
 });
 
-test('detect: Gespeichertes schlägt Browsersprache, erste passende Browsersprache gewinnt (Block eingehängt)', () => {
-  mitBlock('pl', () => {
-    assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'pl'] }), 'pl');
-    assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'PL-pl', 'de'] }), 'pl', 'Großschreibung und Region');
-    assert.equal(i18n.detect({ storage: fakeStorage(), languages: 'pl_PL' }), 'pl', 'einzelne Zeichenkette');
-    assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"pl"' }), languages: ['de'] }), 'pl');
-    assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"de"' }), languages: ['pl'] }), 'de');
-    assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['de-AT', 'pl'] }), 'de', 'de-AT ist de und kommt zuerst');
-  });
+test('detect: Gespeichertes schlägt Browsersprache, erste passende Browsersprache gewinnt', () => {
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'pl'] }), 'pl');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['sv', 'PL-pl', 'de'] }), 'pl', 'Großschreibung und Region');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: 'pl_PL' }), 'pl', 'einzelne Zeichenkette');
+  assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"pl"' }), languages: ['de'] }), 'pl');
+  assert.equal(i18n.detect({ storage: fakeStorage({ 'hw:lang': '"de"' }), languages: ['pl'] }), 'de');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['de-AT', 'pl'] }), 'de', 'de-AT ist de und kommt zuerst');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['pt-BR'] }), 'pt', 'pt-BR ist der Block pt');
+  assert.equal(i18n.detect({ storage: fakeStorage(), languages: ['zh-Hans-CN'] }), 'zh');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -294,18 +332,19 @@ test('apply beschriftet textContent, aria-label, placeholder, title, lang und do
   assert.equal(doc.title, 'Heizwarte');
 });
 
-test('apply schreibt bis M4 kein hw:lang, danach schon (Block eingehängt)', () => {
+test('apply speichert seit M4 die gewählte Sprache in hw:lang, ein fehlender Schlüssel fällt auf de zurück', () => {
   const doc = fakeDocument([]);
-  const vorher = fakeStorage();
-  i18n.apply('de', { document: doc, storage: vorher });
-  assert.equal(vorher.map.has('hw:lang'), false, 'mit nur einem Block bliebe jeder auf de festgelegt');
+  const speicher = fakeStorage();
+  i18n.apply('pl', { document: doc, storage: speicher });
+  assert.equal(speicher.map.get('hw:lang'), '"pl"');
+  assert.equal(doc.documentElement.lang, 'pl');
+  assert.equal(i18n.lang, 'pl');
+  assert.equal(i18n.t('btnBack'), I18N.pl.btnBack);
+  assert.equal(i18n.wmo(61), I18N.pl.wmo61);
 
+  // Prüfblock ohne Schlüssel: Rückfall auf de, nie auf den Schlüsselnamen
   mitBlock('pl', () => {
-    const nachher = fakeStorage();
-    i18n.apply('pl', { document: doc, storage: nachher });
-    assert.equal(nachher.map.get('hw:lang'), '"pl"');
-    assert.equal(doc.documentElement.lang, 'pl');
-    assert.equal(i18n.lang, 'pl');
+    i18n.apply('pl', { document: doc, storage: fakeStorage() });
     assert.equal(i18n.t('btnBack'), 'Zurück', 'fehlender Schlüssel im Block fällt auf de zurück');
     assert.equal(i18n.wmo(61), 'Leichter Regen');
     // werfendes Backend: init() darf an hw:lang nie scheitern

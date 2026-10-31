@@ -46,11 +46,15 @@ function escapeRx(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Der deutsche Text eines Schlüssels; {x}-Platzhalter werden mit vars gefüllt, fehlende bleiben stehen
-function deText(key, vars) {
-  const s = I18N.de[key];
-  if (typeof s !== 'string' || s === '') { throw new Error('Schlüssel ' + key + ' fehlt in I18N.de'); }
+// Der Text eines Schlüssels in einer Sprache; {x}-Platzhalter werden mit vars gefüllt, fehlende bleiben stehen
+function langText(lang, key, vars) {
+  const s = I18N[lang] && I18N[lang][key];
+  if (typeof s !== 'string' || s === '') { throw new Error('Schlüssel ' + key + ' fehlt in I18N.' + lang); }
   return s.replace(/\{(\w+)\}/g, (m, k) => (vars && Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m));
+}
+
+function deText(key, vars) {
+  return langText('de', key, vars);
 }
 
 // Ein Satz mit Platzhaltern als Muster: der feste Anteil wörtlich, jeder Platzhalter steht für beliebigen Text
@@ -286,12 +290,18 @@ async function expectHeadingOrder(page, where) {
   expect(heads.filter((h) => h.text === ''), 'leere Überschrift: ' + where).toEqual([]);
 }
 
-// Geht alle Bildschirme der Einrichtung, den Hauptbildschirm und die Einstellungen durch und ruft check(Name) auf jedem auf
-async function walkScreens(page, net, check) {
+// Geht alle Bildschirme der Einrichtung, den Hauptbildschirm und die Einstellungen durch und ruft check(Name) auf jedem auf.
+// lang: in dieser Sprache, mit leerem Speicher bis auf hw:lang (der Durchgang beginnt jedes Mal bei S1)
+async function walkScreens(page, net, check, lang = 'de') {
   const seen = [];
   const visit = async (name) => { seen.push(name); await check(name); };
   await page.goto('/');
+  if (lang !== 'de' || await page.evaluate(() => localStorage.length > 0)) {
+    await page.evaluate((code) => { localStorage.clear(); localStorage.setItem('hw:lang', JSON.stringify(code)); }, lang);
+    await page.goto('/');
+  }
   await expect(page.locator('#s-welcome')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', lang);
   await visit('S1 Start');
 
   await page.locator('#btnByAddress').click();
@@ -299,14 +309,14 @@ async function walkScreens(page, net, check) {
   await visit('S2 Adresse');
 
   await page.locator('#btnSearch').click();
-  await expect(page.locator('#err-address')).toContainText(deText('errNeedPlace'));
+  await expect(page.locator('#err-address')).toContainText(langText(lang, 'errNeedPlace'));
   await visit('S2 mit Fehlerzeile (Ort fehlt)');
 
   await fillAddress(page);
   const hits = net.on.photon;
   net.on.photon = (route) => answer(route, fixtureText('photon-leer.json'));
   await page.locator('#btnSearch').click();
-  await expect(page.locator('#err-address')).toContainText(deText('errNoHit'));
+  await expect(page.locator('#err-address')).toContainText(langText(lang, 'errNoHit'));
   await expect(page.locator('#btnCityOnly')).toBeVisible();
   await visit('S2 mit Fehlerzeile (nichts gefunden)');
 
@@ -396,8 +406,8 @@ test('Fall 1: Einrichtung nur mit der Tastatur, mehrere Treffer', async ({ page 
   await expect(page.locator('#setupStep')).toHaveText('');
   await expect(page.locator('#nowTemp')).toContainText('°');
   await expect(page.locator('#verdictAction')).toContainText(/\d{1,2}:\d{2}/);
-  // bis M4 schreibt apply() die Sprache nicht in den Speicher
-  expect(await page.evaluate(() => localStorage.getItem('hw:lang'))).toBeNull();
+  // seit M4 (14 Blöcke) merkt sich apply() die erkannte Sprache
+  expect(await page.evaluate(() => localStorage.getItem('hw:lang'))).toBe('"de"');
 });
 
 test('Fall 1: Einrichtung mit nur einem Treffer, Zurück führt zu S2 mit gefüllten Feldern', async ({ page }) => {
@@ -441,12 +451,13 @@ test('Fall 2: jede Tippfläche ist mindestens 48 × 48 px, kein Knopf trägt dis
   await walkScreens(page, net, (where) => expectTapSizes(page, where));
 });
 
-test('Fall 3: keine horizontale Scrollleiste, Fußzeilen-Links mit Text und Hinweis (nur de bis M4)', async ({ page }) => {
+test('Fall 3: keine horizontale Scrollleiste, Fußzeilen-Links mit Text und Hinweis, in allen 14 Sprachen', async ({ page }) => {
+  // 14 Durchgänge à zehn Bildschirme
+  test.setTimeout(14 * 60000);
   const net = await mockNet(page);
   await startClock(page);
-  // Bis M4 gibt es nur den Block de und keine Sprachwahl; mit M4 läuft diese Schleife über alle 14 Sprachen
-  // und wechselt vor jedem Durchgang per langSelect (B:66, B:67).
-  for (const lang of ['de']) {
+  // Die Sprache kommt vor jedem Durchgang über hw:lang (wie nach einer Wahl in #langSelect, die Fall 3b prüft)
+  for (const lang of Object.keys(I18N)) {
     await walkScreens(page, net, async (where) => {
       await expectNoHorizontalScroll(page, lang + ', ' + where);
       // Die Fußzeile sieht auf jedem Bildschirm gleich aus: drei Links, jeder mit Text und Hinweis „öffnet extern“
@@ -458,8 +469,33 @@ test('Fall 3: keine horizontale Scrollleiste, Fußzeilen-Links mit Text und Hinw
         const hint = (await a.locator('.visually-hidden').textContent()).trim();
         expect(hint, 'versteckter Hinweis: ' + lang + ', ' + where).not.toBe('');
       }
-    });
+    }, lang);
   }
+});
+
+test('Fall 3b: die Sprachwahl in den Einstellungen wechselt sofort und bleibt nach dem Neuladen', async ({ page }) => {
+  await mockNet(page);
+  await startClock(page);
+  await setUpByClicks(page);
+  await page.locator('#settingsBtn').click();
+  await expect(page.locator('#s-settings')).toBeVisible();
+  const sel = page.locator('#langSelect');
+  await expect(sel.locator('option')).toHaveCount(14);
+  await expect(sel).toHaveValue('de');
+  // jede Sprache steht mit ihrem eigenen Namen und lang-Attribut im Feld
+  for (const code of Object.keys(I18N)) {
+    await expect(sel.locator('option[value="' + code + '"]')).toHaveText(I18N[code]._name);
+    await expect(sel.locator('option[value="' + code + '"]')).toHaveAttribute('lang', code);
+  }
+  await sel.selectOption('ja');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ja');
+  await expect(page.locator('label[for="langSelect"]')).toHaveText(langText('ja', 'langLabel'));
+  await expect(sel).toHaveValue('ja');
+  expect(await page.evaluate(() => localStorage.getItem('hw:lang'))).toBe('"ja"');
+  await page.reload();
+  await expect(page.locator('#s-main')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ja');
+  await expect(page.locator('#reload')).toContainText(langText('ja', 'btnReload'));
 });
 
 test('Fall 4: keine Konsolenfehler im ganzen Durchlauf', async ({ page, errors }) => {
