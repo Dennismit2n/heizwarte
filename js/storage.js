@@ -321,7 +321,25 @@
     }
   }
 
-  const api = { use, get, set, remove, migrate };
+  // Die gemeinsame Darstellung der Werkstatt (Sehhilfen, 31.10.2026): werkstatt.darstellung gilt in allen Werkzeugen
+  // auf diesem Ursprung, und die lesen und schreiben ihn OHNE Präfix als rohen Text. Deshalb hier zwei eigene Zugriffe,
+  // nur für die freigegebenen Schlüssel. Sonst wie get/set: Rückfall im Arbeitsspeicher, wirft nie.
+  const SHARED_KEYS = ['werkstatt.darstellung'];
+
+  // Roher Text unter dem gemeinsamen Schlüssel, oder null (fehlt, nicht freigegeben, nicht lesbar)
+  function getShared(key) {
+    if (SHARED_KEYS.indexOf(key) < 0) { return null; }
+    const raw = read(key);
+    return typeof raw === 'string' ? raw : null;
+  }
+
+  // Schreibt rohen Text unter den gemeinsamen Schlüssel. true, wenn er im Backend steht (wie set)
+  function setShared(key, value) {
+    if (SHARED_KEYS.indexOf(key) < 0 || typeof value !== 'string') { return false; }
+    return write(key, value);
+  }
+
+  const api = { use, get, set, remove, migrate, getShared, setShared };
   // null | 'blocked' | 'full'; löst das Backend beim ersten Zugriff mit auf, damit der Wert nie veraltet ist
   Object.defineProperty(api, 'degraded', {
     enumerable: true,

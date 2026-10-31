@@ -63,7 +63,7 @@ test.afterEach(() => {
 // ---------------------------------------------------------------------------------------------
 
 test('Schnittstelle: use, get, set, remove, migrate und degraded; dieselbe Hülle wie Heizwarte.storage', () => {
-  assert.deepEqual(Object.keys(storage).sort(), ['degraded', 'get', 'migrate', 'remove', 'set', 'use']);
+  assert.deepEqual(Object.keys(storage).sort(), ['degraded', 'get', 'getShared', 'migrate', 'remove', 'set', 'setShared', 'use']);
   assert.equal(Heizwarte.storage, require('../js/storage.js'));
   neu();
   assert.equal(storage.degraded, null);

@@ -2523,43 +2523,77 @@
     showSetup({ add: true });
   }
 
-  // Theme (Abschnitt 8): „Darstellung“ mit System, Hell, Dunkel. boot.js hat die Wahl schon vor dem ersten Paint gesetzt;
-  // hier kommt nur das Umschalten dazu. Gespeichert wird als JSON ("light" oder "dark") über persist(), „System“ entfernt
-  // den Schlüssel über forget() (anders als die Startseite, die den Wert roh schreibt).
+  // Theme (Abschnitt 8): „Darstellung“. boot.js hat die Wahl schon vor dem ersten Paint gesetzt; hier kommt das Umschalten
+  // dazu. Seit den Sehhilfen der Werkstatt (31.10.2026) acht Werte: System, Hell, Dunkel, Hoher Kontrast dunkel/hell,
+  // Farbenblind dunkel/hell, Umgekehrte Farben. Die Wahl gilt in allen Werkzeugen der Werkstatt und liegt deshalb als
+  // TEXT unter werkstatt.darstellung (alle auf einem Ursprung, die anderen schreiben roh). hw:theme ("light"/"dark" als
+  // JSON) wird nur noch als Rückfall gelesen, in boot.js und hier in choiceNow().
+  const THEMES = ['system', 'light', 'dark', 'hc-dark', 'hc-light', 'cvd-dark', 'cvd-light', 'invert'];
+  const SHARED_THEME_KEY = 'werkstatt.darstellung';
+  // Adressleiste im Hohen Kontrast: der Grund selbst
+  const HC_COLOR = { dark: '#000000', light: '#FFFFFF' };
 
-  // Gespeicherter Wert hw:theme → Auswahl. Nur "light" und "dark" zählen; fehlt der Wert oder ist er kaputt, gilt „System“.
+  // Gespeicherter Wert → Auswahl. Die acht Werte zählen; ein Wert eines anderen Werkzeugs (Spectroton „soft-dark“) zählt
+  // als seine Familie; fehlt der Wert oder ist er kaputt, gilt „System“.
   function themeOf(stored) {
-    return stored === 'light' || stored === 'dark' ? stored : 'system';
+    if (THEMES.indexOf(stored) >= 0) { return stored; }
+    if (typeof stored === 'string' && /dark/.test(stored)) { return 'dark'; }
+    if (typeof stored === 'string' && /light/.test(stored)) { return 'light'; }
+    return 'system';
   }
 
-  // Setzt data-theme (bei „System“ weg) und gibt beiden theme-color-Metas ihren Ton: den gewählten, bei „System“ den
-  // ihres media-Werts (dunkel oder hell), damit die Adressleiste dem System folgt.
-  function applyTheme(choice) {
+  // Wahl → Attribute: data-theme (light/dark) und data-vision (contrast, cvd, invert). Bei „System“ mit „Kontrast
+  // erhöhen“ am Gerät gilt Hoher Kontrast in der Gerätefarbe. Rein: das Gerät kommt als prefersLight/prefersMore herein.
+  function visionOf(choice, prefersLight, prefersMore) {
     const value = themeOf(choice);
+    if (value === 'light' || value === 'dark') { return { theme: value, vision: null }; }
+    if (value === 'hc-dark' || value === 'hc-light') { return { theme: value.slice(3), vision: 'contrast' }; }
+    if (value === 'cvd-dark' || value === 'cvd-light') { return { theme: value.slice(4), vision: 'cvd' }; }
+    if (value === 'invert') { return { theme: null, vision: 'invert' }; }
+    if (prefersMore) { return { theme: prefersLight ? 'light' : 'dark', vision: 'contrast' }; }
+    return { theme: null, vision: null };
+  }
+
+  function mediaMatches(query) {
+    if (typeof root.matchMedia !== 'function') { return false; }
+    const mq = root.matchMedia(query);
+    return !!(mq && mq.matches);
+  }
+
+  // Setzt data-theme und data-vision (je nach Wahl, sonst weg) und gibt beiden theme-color-Metas ihren Ton: den
+  // gewählten, bei „System“ den ihres media-Werts (dunkel oder hell), damit die Adressleiste dem System folgt.
+  function applyTheme(choice) {
+    const v = visionOf(choice, mediaMatches('(prefers-color-scheme: light)'), mediaMatches('(prefers-contrast: more)'));
     const html = document.documentElement;
-    if (value === 'system') { html.removeAttribute('data-theme'); } else { html.setAttribute('data-theme', value); }
+    if (v.theme) { html.setAttribute('data-theme', v.theme); } else { html.removeAttribute('data-theme'); }
+    if (v.vision) { html.setAttribute('data-vision', v.vision); } else { html.removeAttribute('data-vision'); }
     for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
       const own = /light/.test(meta.getAttribute('media') || '') ? 'light' : 'dark';
-      meta.setAttribute('content', THEME_COLOR[value === 'system' ? own : value]);
+      const tone = v.theme || own;
+      meta.setAttribute('content', v.vision === 'contrast' ? HC_COLOR[tone] : THEME_COLOR[tone]);
     }
   }
 
-  // Farbschema für chart.tcol und chart.scaleCss: 'light' oder 'dark'. Eine Wahl in den Einstellungen (data-theme am
-  // <html>) gilt vor dem System; bei „System“ entscheidet prefers-color-scheme: light, sonst dunkel (wie die CSS-Blöcke).
-  // schemeOf ist rein, currentScheme liest data-theme und matchMedia.
-  function schemeOf(attr, prefersLight) {
-    if (attr === 'light' || attr === 'dark') { return attr; }
-    return prefersLight ? 'light' : 'dark';
+  // Farbschema für chart.tcol und chart.scaleCss: 'light' oder 'dark', dazu 'hc-dark'/'hc-light' im Hohen Kontrast
+  // (Temperaturfarben 7:1) und 'inv-dark' bei Umkehr im Dunkeln (die Seite wird gedreht, die Skala ist darauf
+  // vorbereitet). Eine Wahl in den Einstellungen (data-theme am <html>) gilt vor dem System; bei „System“ entscheidet
+  // prefers-color-scheme: light, sonst dunkel (wie die CSS-Blöcke). schemeOf ist rein, currentScheme liest data-theme,
+  // data-vision und matchMedia.
+  function schemeOf(attr, prefersLight, vision) {
+    const base = attr === 'light' || attr === 'dark' ? attr : (prefersLight ? 'light' : 'dark');
+    if (vision === 'contrast') { return 'hc-' + base; }
+    if (vision === 'invert' && base === 'dark') { return 'inv-dark'; }
+    return base;
   }
 
   function currentScheme() {
-    const attr = document.documentElement.dataset.theme;
+    const ds = document.documentElement.dataset;
     let prefersLight = false;
     if (typeof root.matchMedia === 'function') {
       const mq = root.matchMedia('(prefers-color-scheme: light)');
       prefersLight = !!(mq && mq.matches);
     }
-    return schemeOf(attr, prefersLight);
+    return schemeOf(ds.theme, prefersLight, ds.vision);
   }
 
   // Das Theme hat gewechselt (Auswahl in den Einstellungen oder das System): was app.js aus dem Theme ableitet, neu
@@ -2568,17 +2602,47 @@
     if (state.screen === 's-main') { render(); }
   }
 
+  // Die gespeicherte Wahl: werkstatt.darstellung als Text, sonst hw:theme als JSON (Rückfall), sonst „System“
+  function choiceNow() {
+    const shared = storage.getShared(SHARED_THEME_KEY);
+    return themeOf(shared || storage.get('theme', null));
+  }
+
+  // Die Wahl gilt in der ganzen Werkstatt, also roh unter dem gemeinsamen Schlüssel (persist() schriebe JSON mit
+  // eigenem Präfix). Ist der Speicher gesperrt, gilt die Wahl nur bis zum Neuladen (storage.js hält sie im Speicher).
+  function storeChoice(value) {
+    storage.setShared(SHARED_THEME_KEY, value);
+    updateNotes();
+  }
+
+  // Was die Auswahl zeigt: die zuletzt gewählte oder geladene Wahl. Das Attribut am <html> allein reicht seit den
+  // Sehhilfen nicht mehr, „System“ mit „Kontrast erhöhen“ sieht dort aus wie „Hoher Kontrast“.
+  let shownChoice = 'system';
+
   function onTheme() {
     const value = themeOf($('themeSelect').value);
-    if (value === 'system') { forget('theme'); } else { persist('theme', value); }
+    shownChoice = value;
+    storeChoice(value);
     applyTheme(value);
     onSchemeChange();
   }
 
-  // Die Auswahl zeigt, was gerade gilt: das Attribut am <html> (boot.js und onTheme setzen es). Bei einer neueren
-  // Speicherfassung schreibt persist() nichts; die Wahl gilt dann nur bis zum Neuladen und die Auswahl bleibt ehrlich.
+  // Das Gerät hat gewechselt (hell/dunkel oder „Kontrast erhöhen“): bei „System“ die Attribute nachführen, dann neu zeichnen
+  function onSystemTheme() {
+    if (shownChoice === 'system') { applyTheme('system'); }
+    onSchemeChange();
+  }
+
+  // Eine Wahl in einem anderen Werkzeug der Werkstatt (anderer Tab) oder die Rückkehr aus dem bfcache: übernehmen
+  function onThemeElsewhere() {
+    shownChoice = choiceNow();
+    applyTheme(shownChoice);
+    renderTheme();
+    onSchemeChange();
+  }
+
   function renderTheme() {
-    $('themeSelect').value = themeOf(document.documentElement.getAttribute('data-theme'));
+    $('themeSelect').value = shownChoice;
   }
 
   function renderSettings() {
@@ -2781,10 +2845,19 @@
     loadCache();
     bindEvents();
     i18n.onApply(onLanguage);
-    // Folgt die Darstellung dem System, wechselt es von allein zwischen hell und dunkel: dann neu zeichnen (Abschnitt 5 app)
+    // Folgt die Darstellung dem System, wechselt es von allein zwischen hell und dunkel, und „Kontrast erhöhen“ kann
+    // dazukommen: dann die Attribute nachführen und neu zeichnen (Abschnitt 5 app). Eine Wahl in einem anderen
+    // Werkzeug der Werkstatt (storage) und die Rückkehr aus dem bfcache (pageshow) übernimmt onThemeElsewhere.
+    shownChoice = choiceNow();
     if (typeof root.matchMedia === 'function') {
       const scheme = root.matchMedia('(prefers-color-scheme: light)');
-      if (scheme && typeof scheme.addEventListener === 'function') { scheme.addEventListener('change', onSchemeChange); }
+      if (scheme && typeof scheme.addEventListener === 'function') { scheme.addEventListener('change', onSystemTheme); }
+      const more = root.matchMedia('(prefers-contrast: more)');
+      if (more && typeof more.addEventListener === 'function') { more.addEventListener('change', onSystemTheme); }
+    }
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('storage', (e) => { if (e.key === SHARED_THEME_KEY) { onThemeElsewhere(); } });
+      root.addEventListener('pageshow', (e) => { if (e.persisted) { onThemeElsewhere(); } });
     }
     $('btnByLocation').hidden = !hasGeolocation();
     updateNotes();
@@ -2827,7 +2900,7 @@
       verdictLines, planRows, airRows, chartRows, statusLines, currentOf, extentLine, extractNumber, whenPhrase, nightName, planWhen,
       STEPPERS, stepValue, applyStep, THRESH_STEPPERS, THRESH_FIELDS, applyThreshStep, parseElev, elevPatch, afterDelete, cleanLabel,
       MAX_PLACES, canAddPlace, appendPlace, resolveActive, showsSwitcher, alertsGate, alertLangHint, canExpand,
-      THEME_COLOR, themeOf, applyTheme, schemeOf, currentScheme
+      THEME_COLOR, HC_COLOR, THEMES, themeOf, visionOf, applyTheme, schemeOf, currentScheme
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);

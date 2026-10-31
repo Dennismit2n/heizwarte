@@ -79,6 +79,7 @@ function fakeDoc() {
 // boot.js in einer vm laufen lassen. stored ist der rohe Wert unter hw:theme (null = fehlt); 'throw' lässt den Zugriff
 // auf localStorage werfen; opts.noDocument lässt document weg.
 function runBoot(stored, opts) {
+  const shared = opts && opts.shared !== undefined ? opts.shared : null;
   const doc = fakeDoc();
   const box = {};
   if (!(opts && opts.noDocument)) { box.document = doc; }
@@ -87,11 +88,12 @@ function runBoot(stored, opts) {
   } else {
     box.localStorage = {
       getItem(key) {
-        assert.equal(key, 'hw:theme', 'boot.js liest nur hw:theme');
-        return stored;
+        assert.ok(key === 'werkstatt.darstellung' || key === 'hw:theme', 'boot.js liest nur werkstatt.darstellung und hw:theme');
+        return key === 'hw:theme' ? stored : shared;
       }
     };
   }
+  if (opts && opts.matchMedia) { box.matchMedia = opts.matchMedia; }
   vm.runInNewContext(bootCode, box);
   return doc;
 }
@@ -311,10 +313,11 @@ test('applyTheme: setzt data-theme und beide Metas; „System“ nimmt das Attri
   }
 });
 
-test('app.js: Wechsel speichert über persist() ("light"/"dark" als JSON) oder forget(), setzt das Theme und zeichnet neu', () => {
+test('app.js: Wechsel speichert roh unter werkstatt.darstellung (storage.setShared), setzt das Theme und zeichnet neu', () => {
   const onTheme = funktion(appCode, 'onTheme');
-  assert.match(onTheme, /if \(value === 'system'\) \{ forget\('theme'\); \} else \{ persist\('theme', value\); \}/);
-  assert.match(onTheme, /applyTheme\(value\);\s*onSchemeChange\(\);/);
+  assert.match(onTheme, /shownChoice = value;\s*storeChoice\(value\);\s*applyTheme\(value\);\s*onSchemeChange\(\);/);
+  assert.match(funktion(appCode, 'storeChoice'), /storage\.setShared\(SHARED_THEME_KEY, value\);/);
+  assert.match(funktion(appCode, 'choiceNow'), /storage\.getShared\(SHARED_THEME_KEY\)[\s\S]*storage\.get\('theme', null\)/);
   assert.doesNotMatch(onTheme, /localStorage|storage\.set|storage\.remove/);
   assert.match(funktion(appCode, 'onSchemeChange'), /state\.screen === 's-main'\) \{ render\(\); \}/);
   assert.match(funktion(appCode, 'renderSettings'), /guard\(renderTheme\);/);
@@ -324,7 +327,9 @@ test('app.js: Wechsel speichert über persist() ("light"/"dark" als JSON) oder f
 test('app.js: init() hört auf (prefers-color-scheme: light) und zeichnet beim Wechsel neu', () => {
   const init = funktion(appCode, 'init');
   assert.match(init, /root\.matchMedia\('\(prefers-color-scheme: light\)'\)/);
-  assert.match(init, /addEventListener\('change', onSchemeChange\)/);
+  assert.match(init, /addEventListener\('change', onSystemTheme\)/);
+  assert.match(init, /root\.matchMedia\('\(prefers-contrast: more\)'\)/);
+  assert.match(funktion(appCode, 'onSystemTheme'), /if \(shownChoice === 'system'\) \{ applyTheme\('system'\); \}\s*onSchemeChange\(\);/);
   assert.match(init, /typeof root\.matchMedia === 'function'/, 'ohne matchMedia läuft die App weiter');
 });
 
