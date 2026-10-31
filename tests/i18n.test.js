@@ -24,14 +24,14 @@ const ROOT = path.join(__dirname, '..');
 // Schlüsseltabelle aus BAUPLAN Abschnitt 5 i18n, samt Platzhaltern in geschweiften Klammern.
 // Neuer Schlüssel im Code heißt: hier ergänzen UND in js/i18n.js einen deutschen Text setzen.
 const SCHLUESSEL = {
-  'App, Knöpfe': 'appName appClaim placeLabel btnReload btnReloading btnMore btnLess btnSettings btnBack btnNext btnDone btnRetry btnChange btnUse btnDelete btnAddPlace btnCancel btnCityOnly btnInstall',
+  'App, Knöpfe': 'appName appClaim placeLabel btnReload btnReloading btnMore btnLess btnSettings btnBack btnNext btnDone btnRetry btnChangeElev btnChangeHeat btnUse btnDelete btnAddPlace btnCancel btnCityOnly btnInstall',
   Status: 'statusLoading statusStamp{when,ago} statusStale statusOffline statusNoData statusWaiting{s} statusRateLimited storageBlocked storageFull storeNewer',
   Einrichtung: 'setupIntro setupPrivacy setupByAddress setupByLocation setupStep{n,of} setupAddressTitle setupStreet setupStreetHint setupZip setupCity setupSearch setupSearching setupHitsTitle setupHitsHint setupNoNumber setupNoneFits setupConfirmTitle setupConfirmQuestion setupConfirmYes setupConfirmNo setupRegion{region} setupExtent{w,h} setupExtentKm{w,h} setupCoords{lat,lon} setupElev{m} setupElevAuto setupElevLoading setupElevUnknown setupElevHint setupElevLabel setupLabel setupMyPlace setupGeoWrong setupHeatTitle setupHeatHint setupHeatDontKnow setupHeatDefaultHint hitHouse hitStreet hitPlace hitPoi',
   Fehler: 'errNeedPlace errNoHit errNoHitTip1 errNoHitTip2 errOfflineSearch errSearchRejected errGeoDenied errGeoFailed errElev errElevRange errMaxPlaces errTooOld errLoadFailed',
   Heizarten: 'profileRadiator profileFloorScreed profileFloorDry profileHeatpumpFloor profileStorage profileHintRadiator profileHintFloorScreed profileHintFloorDry profileHintHeatpumpFloor profileHintStorage profileRule',
   Ampel: 'level0 level1 level2 level3 levelOf{n,name} levelTitle0 levelTitle1{when} levelTitle2{when} levelTitle3{when} levelText0 levelText1{onset,lead} levelText2{onset,lead} levelText3{onset,lead} levelTextPast{onset,lead} levelNoData reasonNightMin{t} reasonDrop48{k} reasonColdWindy reasonFrost reasonGtRise{kd} reasonAlert reasonCalmNights{t} reasonNoJumps',
-  Fahrplan: 'planTitle planFor{profile} planTitleStorage planNightOf{day} planStart{time} planToday{time} planDay{day,time} planNow planDue planOptional planDisagree{t} planGusty planNightMin{t,time} planLead{onset,lead} planChargeEvening{level} strengthThrough strengthUp strengthNormal strengthLow chargeTonight{level} chargeHigh chargeUp chargeNormal chargeLow',
-  'Jetzt, Tage': 'nowTitle nowFeels{t} nowWind{kmh} nowHumidity{p} nowNightMin{t,time} daysTitle dayToday dayTomorrow dayMin{t} dayMax{t} dayRain{mm} daySun{h} dayGust{kmh} dayColder{k} dayWarmer{k} daySame',
+  Fahrplan: 'planTitle planFor{profile} planTitleStorage planNightToday planNightTomorrow planNightOf{day} planStart{time} planToday{time} planDay{day,time} planNow planDue planOptional planDisagree{t} planGusty planNightMin{t,time} planLead{onset,lead} planChargeEvening{level} strengthThrough strengthUp strengthNormal strengthLow chargeTonight{level} chargeHigh chargeUp chargeNormal chargeLow',
+  'Jetzt, Tage': 'nowTitle nowFeels{t} nowWind{kmh} nowHumidity{p} nowNightMin{night,t,time} daysTitle dayToday dayTomorrow dayMin{t} dayMax{t} dayRain{mm} daySun{h} dayGust{kmh} dayColder{k} dayWarmer{k} daySame',
   'Kurve, Lüften': 'chartTitle chartLegendIcon chartLegendMos{station,height} chartLegendRain chartNow chartTipRain{p} chartTipDew{t} chartTipMos{t} chartSummary{min,minWhen,max,maxWhen} chartMosFar airTitle airLabel airNone airNote{dew,comfort} airBest airSlot{time}',
   Warnungen: 'alertTitle alertLangHint alertFrom{when} alertUntil{when} alertUnavailable alertSource',
   Einstellungen: 'settingsTitle settingsPlaces settingsPlaceActive settingsHeat settingsComfort settingsLeadMin settingsLeadMax settingsElev settingsAdvanced settingsThresholdsHint threshWarnMinN threshWarnDrop48 threshAlarmMinN threshAlarmDrop48 threshAlarmGtRise threshCritMinN threshColdWind threshGustLead threshNameWarnMinN threshNameWarnDrop48 threshNameAlarmMinN threshNameAlarmDrop48 threshNameAlarmGtRise threshNameCritMinN threshNameColdWind threshNameGustLead settingsReset settingsDeleteConfirm{name} settingsDeleteLast{name} stepDown{what} stepUp{what} unitHours{n} unitCelsius{n} unitKmh{n} unitDegrees{n} themeLabel themeSystem themeLight themeDark themeHcDark themeHcLight themeCvdDark themeCvdLight themeInvert langLabel',
@@ -109,7 +109,7 @@ test('Stufe M1: I18N enthält genau den Block de, LANGS die 14 Sprachen der Star
 test('Block de hat genau die Schlüssel der Tabelle im Plan, nicht mehr und nicht weniger', () => {
   const vorhanden = Object.keys(de).filter((k) => k !== '_name').sort();
   const soll = Object.keys(ERWARTET).sort();
-  assert.equal(soll.length, 263);
+  assert.equal(soll.length, 266);
   assert.deepEqual(soll.filter((k) => !vorhanden.includes(k)), [], 'fehlt in de');
   assert.deepEqual(vorhanden.filter((k) => !soll.includes(k)), [], 'steht in de, aber nicht in der Tabelle');
 });
@@ -152,29 +152,32 @@ test('Heizarten: jeder Typ hat Namen und Laiensatz mit seiner Aufheizzeit aus Ab
   assert.match(de.profileHintFloorDry, /1 bis 3 Stunden/);
   assert.match(de.profileHintHeatpumpFloor, /4 bis 8 Stunden/);
   assert.match(de.profileHintStorage, /aufladen/);
-  assert.match(de.profileRule, /^Faustregel/);
+  assert.match(de.profileRule, /Richtwerte/);
   for (const k of ['settingsLeadMin', 'settingsLeadMax', 'levelText1']) {
     assert.match(de[k], /Aufheizzeit/, k);
   }
 });
 
-test('Hausstil: ’ statt \', kein Geviertstrich, kein Vorlauf, saubere Leerzeichen', () => {
+test('Hausstil: ’ statt \', keine Gedankenstriche, kein Semikolon, kein Vorlauf, saubere Leerzeichen', () => {
   for (const k of Object.keys(de)) {
     const v = de[k];
     assert.ok(!v.includes('\''), k + ' enthält ein gerades Apostroph');
-    assert.ok(!v.includes('—'), k + ' enthält einen Geviertstrich');
+    // Dennis' Regel seit der Textprüfung (31.10.2026): weder – noch — noch „ - “, auch kein Semikolon
+    assert.ok(!/[–—]/.test(v), k + ' enthält einen Gedankenstrich');
+    assert.ok(!v.includes(';'), k + ' enthält ein Semikolon');
     assert.ok(!v.includes('...'), k + ' enthält drei Punkte statt …');
-    assert.ok(!/\s-\s/.test(v), k + ' enthält einen Bindestrich mit Leerzeichen statt –');
+    assert.ok(!/\s-\s/.test(v), k + ' enthält einen Bindestrich mit Leerzeichen');
     assert.equal(v, v.trim(), k + ' hat Leerraum am Rand');
     assert.ok(!/ {2}/.test(v), k + ' hat doppelte Leerzeichen');
     assert.ok(!/Vorlauf/.test(v), k + ' sagt Vorlauf; in der Oberfläche heißt es Aufheizzeit');
   }
 });
 
-test('Datenschutzsätze nennen den gerundeten Standort (Entscheidung 13, Wahl a)', () => {
-  assert.match(de.setupPrivacy, /einmal dein auf etwa 100 m gerundeter Standort/);
-  assert.match(de.footerPrivacy, /\(oder einmal dein auf etwa 100 m gerundeter Standort\)/);
-  assert.match(de.footerPrivacy, /Ortssuche raus; die Wetterdienste bekommen nur auf etwa 100 m gerundete Koordinaten\. Sonst verlässt nichts dein Gerät\.$/);
+test('Datenschutzsätze nennen den gerundeten Standort (Entscheidung 13, Wahl a) und die mitgeschickte Höhe', () => {
+  assert.match(de.setupPrivacy, /deinen Standort, geht der einmal an die Ortssuche, auf etwa 100 m gerundet\./);
+  assert.match(de.setupPrivacy, /Die Wetterdienste bekommen nur den gerundeten Ort und seine Höhe\.$/);
+  assert.match(de.footerPrivacy, /^Deine Adresse oder dein auf etwa 100 m gerundeter Standort geht einmal zur Ortssuche raus\./);
+  assert.match(de.footerPrivacy, /Die Wetterdienste bekommen nur auf etwa 100 m gerundete Koordinaten, Open-Meteo dazu die Höhe des Ortes\. Sonst verlässt nichts dein Gerät\.$/);
   assert.doesNotMatch(de.setupPrivacy + de.footerPrivacy, /einmal dein Standort/);
 });
 
@@ -208,8 +211,8 @@ test('t(): Platzhalter, Rückfall auf den Schlüssel, nichts Besonderes bei $ im
   assert.equal(i18n.t('btnBack'), 'Zurück');
   assert.equal(i18n.t('statusStamp', { when: 'heute 12:00', ago: 'vor 3 Stunden' }), 'Stand: heute 12:00 (vor 3 Stunden).');
   assert.equal(i18n.t('setupStep', { n: 2, of: 4 }), 'Schritt 2 von 4');
-  assert.equal(i18n.t('planDay', { day: 'Dienstag', time: 0 }), 'Dienstag ab 0', 'Zahl 0 ist ein Wert');
-  assert.equal(i18n.t('planDay', { day: '$&', time: '$1' }), '$& ab $1');
+  assert.equal(i18n.t('planDay', { day: 'Dienstag', time: 0 }), 'am Dienstag ab 0', 'Zahl 0 ist ein Wert');
+  assert.equal(i18n.t('planDay', { day: '$&', time: '$1' }), 'am $& ab $1');
   assert.equal(i18n.t('levelTitle2', {}), 'Heizung {when} deutlich hochdrehen.', 'fehlender Wert lässt den Platzhalter stehen');
   assert.equal(i18n.t('levelTitle2', { when: null }), 'Heizung {when} deutlich hochdrehen.');
   assert.equal(i18n.t('gibtEsNicht'), 'gibtEsNicht');

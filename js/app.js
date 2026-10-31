@@ -1403,7 +1403,9 @@
     setLine('nowWind', isNum(cur.wind) ? t('nowWind', { kmh: f.num(Math.round(cur.wind), 0) }) : '');
     setLine('nowHumidity', isNum(cur.rh) ? t('nowHumidity', { p: f.num(Math.round(cur.rh), 0) }) : '');
     const night = view.v.nights[0];
-    setLine('nowNightMin', night ? t('nowNightMin', { t: f.deg(night.min, 1), time: f.time(night.atMs, view.m.tz) }) : '');
+    setLine('nowNightMin', night ? t('nowNightMin', {
+      night: nightName(view, night, timeFmt(view)), t: f.deg(night.min, 1), time: f.time(night.atMs, view.m.tz)
+    }) : '');
   }
 
   // Der Fahrplaneintrag, von dem Handlungssatz und Begründung handeln: der erste, dessen Nacht noch läuft
@@ -1692,20 +1694,15 @@
     return PROFILE_KEY[type] ? t('planFor', { profile: t(PROFILE_KEY[type]) }) : t('planTitle');
   }
 
-  // „Heute Nacht“, „Morgen Nacht“, danach der Wochentag („Mittwoch Nacht“). Die Nacht gehört zum Abend ihres Tags.
+  // „Heute Nacht“, „Morgen Nacht“, danach der Wochentag („Mittwochnacht“). Die Nacht gehört zum Abend ihres Tags.
+  // Eigene Schlüssel für heute und morgen, weil andere Sprachen sie nicht aus Tag + Nacht bauen („Tonight“).
   // Rein, zt aus timeFmt(view).
   function nightName(view, night, zt) {
     const off = night.dayIdx - view.todayIdx;
-    let day;
-    if (off === 0) {
-      day = zt.t('dayToday');
-    } else if (off === 1) {
-      day = zt.t('dayTomorrow');
-    } else {
-      const own = view.m.days[night.dayIdx];
-      day = own ? zt.wday(dayMs(view, own)) : '';
-    }
-    return zt.t('planNightOf', { day });
+    if (off === 0) { return zt.t('planNightToday'); }
+    if (off === 1) { return zt.t('planNightTomorrow'); }
+    const own = view.m.days[night.dayIdx];
+    return zt.t('planNightOf', { day: own ? zt.wday(dayMs(view, own)) : '' });
   }
 
   // Zeile mit dem Start: „Jetzt“, wenn er fällig ist; sonst „Start ab 15:00“. Nur wenn der Start nicht auf den Tag
@@ -1730,7 +1727,7 @@
   //   fmt.num(x)                       Zahl mit höchstens einer Nachkommastelle (Aufheizzeit)
   //   fmt.todayIdx                     Index des heutigen Tages im Modell (verdict.nights[k].dayIdx ist derselbe Index)
   //   fmt.mosNear                      liegt die MOSMIX-Station nah genug, damit die zweite Meinung zählt
-  //   fmt.nightName(night)             „Heute Nacht“, „Morgen Nacht“, „Mittwoch Nacht“
+  //   fmt.nightName(night)             „Heute Nacht“, „Morgen Nacht“, „Mittwochnacht“
   //   fmt.isDue(entry, night)          ist der Start fällig (heat.isDue)
   //   fmt.startLine(entry, night, due) Zeile mit dem Start: „Jetzt“, „Start ab 15:00“, „Montag ab 22:00“
   // Nachtspeicher: statt des Starts steht je Abend die Aufladung (chargeTonight für heute, planChargeEvening für die
