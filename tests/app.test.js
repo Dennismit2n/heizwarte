@@ -96,7 +96,9 @@ function fmtFor(view, over) {
     mosNear: false,
     nightName: (night) => {
       const off = night.dayIdx - view.todayIdx;
-      return i18n.t('planNightOf', { day: off === 0 ? i18n.t('dayToday') : (off === 1 ? i18n.t('dayTomorrow') : 'Tag ' + off) });
+      if (off === 0) { return i18n.t('planNightToday'); }
+      if (off === 1) { return i18n.t('planNightTomorrow'); }
+      return i18n.t('planNightOf', { day: 'Tag ' + off });
     },
     isDue: (entry, night) => { calls.isDue++; return heat.isDue(entry, view.now.ms, night.toMs); },
     startLine: (entry, night, due) => {
@@ -117,7 +119,7 @@ function classes(row) {
 }
 
 // Wörter, die beim Nachtspeicher nirgends stehen dürfen: Startzeit, Aufheizzeit, Hinweise nur für Heizarten mit Start
-const NUR_MIT_START = /Start|Aufheizzeit|Abkühlung ab|Böen|fällig|optional|Heizung eine Stufe|Normal heizen|Sparsam|Durchheizen/;
+const NUR_MIT_START = /Start|Aufheizzeit|Abkühlung ab|Böen|fällig|nur bei Bedarf|Heizung höher stellen|Normal heizen|Sparsam|Durchheizen/;
 
 // ---------------------------------------------------------------------------------------------
 // planRows: Nachtspeicher
@@ -129,7 +131,7 @@ test('planRows Nachtspeicher: je Abend die Aufladung, heute mit chargeTonight, d
   const rows = planRows(view.v, placeOf(PROF.storage), fmt);
 
   assert.equal(rows.length, 3, 'eine Karte je Nacht');
-  assert.deepEqual(rows.map((r) => r.head), ['Heute Nacht', 'Morgen Nacht', 'Tag 2 Nacht']);
+  assert.deepEqual(rows.map((r) => r.head), ['Heute Nacht', 'Morgen Nacht', 'Tag 2nacht']);
   // Nächte 6 / 3 / 1 °C → normal / up / up (heat.test.js)
   assert.equal(rows[0].lines[0].cls, 'plan-when');
   assert.equal(rows[0].lines[0].text, 'Aufladung heute Abend: normal');
@@ -174,7 +176,7 @@ test('planRows Nachtspeicher: Tiefstwert mit Uhrzeit, wie bei jeder Heizart', ()
   const n = view.v.nights[0];
   const meta = rows[0].lines.find((l) => l.cls === 'plan-meta');
   assert.equal(meta.text, i18n.t('planNightMin', { t: i18n.fmt.deg(n.min, 1), time: i18n.fmt.time(n.atMs, view.m.tz) }));
-  assert.match(meta.text, /^Tiefster Wert [−\d]/);
+  assert.match(meta.text, /^Tiefstwert [−\d]/);
 });
 
 test('planRows Nachtspeicher: auch mitten in der Nacht keine Startzeile und kein „Start fällig“', () => {
@@ -241,7 +243,7 @@ test('planRows Fußbodenheizung: Startzeile, Heizstufe, Tiefstwert und Aufheizze
   assert.equal(first.lines[1].text, i18n.t('strengthThrough'));
   const e = view.v.plan[0];
   assert.equal(first.lines[3].text, i18n.t('planLead', { onset: i18n.fmt.time(e.onsetMs, view.m.tz), lead: roundedNum(e.lead) }));
-  assert.match(first.lines[3].text, /Aufheizzeit: \d(,\d)? h\.$/);
+  assert.match(first.lines[3].text, /Aufheizzeit: \d(,\d)? Std\.$/);
   assert.ok(e.lead > 2, 'die Fußbodenheizung im Estrich heizt länger vor als ein Heizkörper');
   for (const row of rows) { for (const text of texts(row)) { assert.doesNotMatch(text, /Aufladung/, text); } }
 });
@@ -258,7 +260,7 @@ test('planRows Fußbodenheizung: mitten in der Nacht steht „Start fällig“, 
   v.plan[2].optional = true;
   const r = planRows(v, placeOf(PROF.floorScreed), fmtFor(view).fmt);
   assert.equal(r[1].lines.find((l) => l.cls === 'plan-note').text, i18n.t('planGusty'));
-  assert.equal(r[2].lines.find((l) => l.cls === 'plan-tag').text, 'optional');
+  assert.equal(r[2].lines.find((l) => l.cls === 'plan-tag').text, 'nur bei Bedarf');
 });
 
 test('planRows Heizkörper gegen Fußboden: dieselben Karten, aber die Aufheizzeit kommt aus dem Profil', () => {
@@ -266,8 +268,8 @@ test('planRows Heizkörper gegen Fußboden: dieselben Karten, aber die Aufheizze
   const vb = viewOf('om-frost.json', PROF.floorScreed);
   const a = planRows(va.v, placeOf(PROF.radiator), fmtFor(va).fmt);
   const b = planRows(vb.v, placeOf(PROF.floorScreed), fmtFor(vb).fmt);
-  assert.ok(a[0].lines.at(-1).text.endsWith('Aufheizzeit: ' + roundedNum(va.v.plan[0].lead) + ' h.'));
-  assert.ok(b[0].lines.at(-1).text.endsWith('Aufheizzeit: ' + roundedNum(vb.v.plan[0].lead) + ' h.'));
+  assert.ok(a[0].lines.at(-1).text.endsWith('Aufheizzeit: ' + roundedNum(va.v.plan[0].lead) + ' Std.'));
+  assert.ok(b[0].lines.at(-1).text.endsWith('Aufheizzeit: ' + roundedNum(vb.v.plan[0].lead) + ' Std.'));
   assert.ok(va.v.plan[0].lead < vb.v.plan[0].lead, 'Heizkörper heizt kürzer vor');
   assert.equal(a.length, b.length);
 });
@@ -334,7 +336,7 @@ test('verdictLines Fußbodenheizung: levelTitle mit Satzteil und levelText mit A
   assert.equal(out.action, 'Heizung ZEIT deutlich hochdrehen.');
   const e = view.v.plan[0];
   assert.equal(out.body, i18n.t('levelText2', { onset: i18n.fmt.time(e.onsetMs, view.m.tz), lead: roundedNum(e.lead) }));
-  assert.match(out.body, /^Abkühlung setzt gegen \d{1,2}:\d{2} ein\. Bei \d(,\d)? h Aufheizzeit musst du vorher starten\.$/);
+  assert.match(out.body, /^Abkühlung setzt gegen \d{1,2}:\d{2} ein\. Bei \d(,\d)? Std\. Aufheizzeit musst du vorher starten\.$/);
   assert.doesNotMatch(out.action, /Aufladung/);
 });
 
@@ -346,7 +348,7 @@ test('verdictLines: hat die Abkühlung schon begonnen, steht levelTextPast statt
     // Abkühlung liegt hinter „jetzt“: der Satz steht in der Vergangenheit und nennt dieselbe Uhrzeit und Aufheizzeit
     const spaet = verdictLines(level, e, placeOf(PROF.floorScreed), fmtFor(view, { onsetPassed: () => true }).fmt);
     assert.equal(spaet.body, i18n.t('levelTextPast', vars), 'Stufe ' + level);
-    assert.match(spaet.body, /^Abkühlung hat gegen \d{1,2}:\d{2} eingesetzt\. Bei \d(,\d)? h Aufheizzeit /, 'Stufe ' + level);
+    assert.match(spaet.body, /^Abkühlung hat gegen \d{1,2}:\d{2} eingesetzt\. Bei \d(,\d)? Std\. Aufheizzeit /, 'Stufe ' + level);
     assert.equal(spaet.action, i18n.t(['levelTitle0', 'levelTitle1', 'levelTitle2', 'levelTitle3'][level], { when: 'ZEIT' }), 'Stufe ' + level + ': Handlungssatz unverändert');
     // Abkühlung steht noch bevor, oder fmt kennt onsetPassed nicht (ältere Aufrufer): der bisherige Satz
     const vorher = verdictLines(level, e, placeOf(PROF.floorScreed), fmtFor(view, { onsetPassed: () => false }).fmt);
@@ -371,19 +373,19 @@ test('Verdrahtung: verdictFmt reicht onsetPassed aus view.now an verdictLines, u
   assert.equal((code.match(/levelTextPast/g) || []).length, 2, 'levelTextPast steht in app.js nur in verdictLines und seinem Kommentar');
 });
 
-test('verdictLines: Aufheizzeit 1 heißt „1 h“, nie „1 Stunden“ (Heizkörper, Trockenbau; alle drei Stufen gleich)', () => {
+test('verdictLines: Aufheizzeit 1 heißt „1 Std.“, nie „1 Stunden“ (Heizkörper, Trockenbau; alle drei Stufen gleich)', () => {
   const view = viewOf('om-frost.json', PROF.radiator);
   const { fmt } = fmtFor(view);
   const e = Object.assign({}, view.v.plan[0], { lead: 1 });
   for (const level of [1, 2, 3]) {
     const out = verdictLines(level, e, placeOf(PROF.radiator), fmt);
-    assert.match(out.body, /Bei 1 h Aufheizzeit musst du vorher starten\.$/, 'Stufe ' + level);
+    assert.match(out.body, /Bei 1 Std\. Aufheizzeit musst du vorher starten\.$/, 'Stufe ' + level);
     assert.doesNotMatch(out.body, /Stunden/, 'Stufe ' + level);
   }
   const halb = verdictLines(1, Object.assign({}, e, { lead: 0.5 }), placeOf(PROF.radiator), fmt);
-  assert.match(halb.body, /Bei 0,5 h Aufheizzeit/);
-  // derselbe Wortlaut wie im Fahrplan (planLead): Zahl und „h“
-  assert.match(i18n.t('planLead', { onset: '22:00', lead: '1' }), /1 h\.$/);
+  assert.match(halb.body, /Bei 0,5 Std\. Aufheizzeit/);
+  // derselbe Wortlaut wie im Fahrplan (planLead): Zahl und „Std.“
+  assert.match(i18n.t('planLead', { onset: '22:00', lead: '1' }), /1 Std\.$/);
 });
 
 test('verdictLines: Stufe 0 ist für jede Heizart dieselbe; ab Stufe 1 ohne Eintrag bleiben beide Zeilen leer', () => {
@@ -452,12 +454,12 @@ const STATUS_NOW = Date.UTC(2026, 0, 13, 12, 30);
 // Die Sätze der Tabelle, wörtlich (so fängt der Test auch einen vertauschten Schlüssel)
 const S = {
   loading: 'Wird aktualisiert …',
-  stale: '⚠ Veraltet – älter als einen Tag.',
-  offline: '⚠ Veraltet – gerade keine Verbindung. Sobald du wieder Netz hast, tippe auf Neu laden.',
-  failed: '⚠ Veraltet – der Wetterdienst hat nicht geantwortet. Tippe auf Neu laden.',
-  waiting60: 'Der Wetterdienst ist gerade ausgelastet. Heizwarte versucht es in 60 Sekunden noch einmal.',
-  rateLimited: '⚠ Veraltet – der Wetterdienst ist ausgelastet. Versuch es in ein paar Minuten mit Neu laden.',
-  noData: 'Noch keine Wetterdaten. Tippe auf Neu laden.'
+  stale: '⚠ Veraltet, älter als einen Tag.',
+  offline: '⚠ Veraltet, gerade keine Verbindung. Sobald du wieder Netz hast, tippe auf „Neu laden“.',
+  failed: '⚠ Veraltet, der Wetterdienst hat nicht geantwortet. Tippe auf „Neu laden“.',
+  waiting60: 'Der Wetterdienst ist gerade ausgelastet. Heizwarte versucht es in etwa 60 Sekunden noch einmal.',
+  rateLimited: '⚠ Veraltet, der Wetterdienst ist ausgelastet. Tippe in ein paar Minuten auf „Neu laden“.',
+  noData: 'Noch keine Wetterdaten. Tippe auf „Neu laden“.'
 };
 
 // Formatierer wie statusFmt() in app.js, nur mit fester Zeitzone und Sprache statt Seitenzustand
@@ -532,7 +534,7 @@ test('statusLines: ohne Netz steht „⚠ Veraltet“ unabhängig vom Alter, gen
       assert.equal(lines.length, 2, status + ' ' + hours + ' h: Stand und ein Satz');
       assert.equal(lines[0].cls, 'status-stamp');
       assert.equal(lines[1].cls, 'status-warn');
-      assert.match(lines[1].text, /^⚠ Veraltet – /, status + ' ' + hours + ' h');
+      assert.match(lines[1].text, /^⚠ Veraltet, /, status + ' ' + hours + ' h');
       assert.equal(lines.filter((l) => /Veraltet/.test(l.text)).length, 1, status + ' ' + hours + ' h: kein zweites „Veraltet“ durch statusStale');
     }
   }
@@ -585,8 +587,8 @@ test('statusLines: zu alte Daten (Ampel ohne Stufe) zeigen Stand und statusStale
 
 test('statusLines: statusWaiting nennt die Wartezeit, ohne gültige Zahl 60', () => {
   assert.equal(statusOf('waiting', cacheAged(1), { waitS: 120 })[1].text,
-    'Der Wetterdienst ist gerade ausgelastet. Heizwarte versucht es in 120 Sekunden noch einmal.');
-  assert.equal(statusOf('waiting', cacheAged(1), { waitS: 90.4 })[1].text.includes('in 90 Sekunden'), true);
+    'Der Wetterdienst ist gerade ausgelastet. Heizwarte versucht es in etwa 120 Sekunden noch einmal.');
+  assert.equal(statusOf('waiting', cacheAged(1), { waitS: 90.4 })[1].text.includes('in etwa 90 Sekunden'), true);
   for (const waitS of [0, -5, NaN, undefined, null, '60', Infinity]) {
     assert.equal(statusOf('waiting', cacheAged(1), { waitS })[1].text, S.waiting60, String(waitS));
   }
@@ -622,7 +624,7 @@ test('statusLines: jede Kombination ergibt ganze Sätze, Warnungen tragen Symbol
           assert.ok(typeof l.text === 'string' && l.text.length > 0);
           assert.doesNotMatch(l.text, /[{}]/, 'kein offener Platzhalter: ' + l.text);
           assert.doesNotMatch(l.text, /undefined|NaN|null/, l.text);
-          if (l.cls === 'status-warn') { assert.match(l.text, /^⚠ Veraltet – /); } else { assert.doesNotMatch(l.text, /⚠|Veraltet/); }
+          if (l.cls === 'status-warn') { assert.match(l.text, /^⚠ Veraltet, /); } else { assert.doesNotMatch(l.text, /⚠|Veraltet/); }
         }
       }
     }
@@ -711,7 +713,7 @@ test('whenPhrase am 25.10.2026: die doppelte Stunde 2:30 heißt „heute ab 2:30
   // vom Samstag aus: der Start am Sonntag trägt den Wochentag, der am Samstag „heute“
   const samstag = viewAt('om-dst.json', DST.satNoon);
   assert.equal(samstag.now.key, '2026-10-24');
-  assert.equal(whenPhrase(samstag, { startMs: DST.second230 }, zt), 'Sonntag ab 2:30');
+  assert.equal(whenPhrase(samstag, { startMs: DST.second230 }, zt), 'am Sonntag ab 2:30');
   assert.equal(whenPhrase(samstag, { startMs: Date.UTC(2026, 9, 24, 14, 0) }, zt), 'heute ab 16:00');
 });
 
@@ -724,12 +726,12 @@ test('planWhen über die Umstellung: eigener Tag, Folgetag, Start am Vortag und 
   // Start auf dem Tag der Nacht: nur die Uhrzeit (16:00 Sommerzeit)
   assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 24, 14, 0) }, satNacht, false, zt), 'Start ab 16:00');
   // Start nach Mitternacht, in der zweiten 2-Uhr-Stunde: anderer Tag als die Nacht, also mit Wochentag
-  assert.equal(planWhen(samstag, { startMs: DST.second230 }, satNacht, false, zt), 'Sonntag ab 2:30');
+  assert.equal(planWhen(samstag, { startMs: DST.second230 }, satNacht, false, zt), 'Am Sonntag ab 2:30');
   // derselbe Start, gesehen vom ersten 2:30 aus: jetzt ist schon Sonntag, also „Heute“
   assert.equal(planWhen(viewAt('om-dst.json', DST.first230), { startMs: DST.second230 }, satNacht, false, zt), 'Heute ab 2:30');
   // Start am Vortag der Nacht (Samstag 22:00 für die Sonntagnacht): heute bzw. mit Wochentag
   assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 24, 20, 0) }, sonNacht, false, zt), 'Heute ab 22:00');
-  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 25, 21, 0) }, monNacht, false, zt), 'Sonntag ab 22:00');
+  assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 25, 21, 0) }, monNacht, false, zt), 'Am Sonntag ab 22:00');
   // Sonntagnacht nach der Umstellung: 18:00 Winterzeit = 17:00Z
   assert.equal(planWhen(samstag, { startMs: Date.UTC(2026, 9, 25, 17, 0) }, sonNacht, false, zt), 'Start ab 18:00');
   // fällig: „Jetzt“ mit großem Anfangsbuchstaben, ohne Uhrzeit
@@ -740,12 +742,12 @@ test('nightName: Heute, Morgen, danach der Wochentag des Abends, auch über die 
   const zt = ztFor('Europe/Berlin');
   const samstag = viewAt('om-dst.json', DST.satNoon);
   assert.deepEqual([0, 1, 2, 3, 4].map((k) => nightName(samstag, { dayIdx: k }, zt)),
-    ['Heute Nacht', 'Morgen Nacht', 'Montag Nacht', 'Dienstag Nacht', 'Mittwoch Nacht']);
+    ['Heute Nacht', 'Morgen Nacht', 'Montagnacht', 'Dienstagnacht', 'Mittwochnacht']);
   // in der doppelten Stunde ist „heute“ der Sonntag, ganz gleich, ob Sommer- oder Winterzeit
   for (const ms of [DST.first230, DST.second230]) {
     const v = viewAt('om-dst.json', ms);
     assert.equal(nightName(v, { dayIdx: 1 }, zt), 'Heute Nacht');
-    assert.equal(nightName(v, { dayIdx: 3 }, zt), 'Dienstag Nacht');
+    assert.equal(nightName(v, { dayIdx: 3 }, zt), 'Dienstagnacht');
   }
 });
 
@@ -759,10 +761,10 @@ test('Lissabon: Uhrzeit, Kalendertag und Wochentag in der Ortszeit des Orts, nic
   assert.equal(whenPhrase(view, { startMs: Date.UTC(2026, 0, 13, 16, 0) }, zt), 'heute ab 16:00');
   assert.equal(whenPhrase(view, spaet, zt), 'heute ab 23:30');
   assert.equal(planWhen(view, spaet, { dayIdx: view.todayIdx }, false, zt), 'Start ab 23:30');
-  assert.equal(planWhen(view, { startMs: Date.UTC(2026, 0, 14, 0, 30) }, { dayIdx: view.todayIdx }, false, zt), 'Mittwoch ab 0:30');
-  assert.deepEqual([1, 2, 3].map((k) => nightName(view, { dayIdx: k }, zt)), ['Heute Nacht', 'Morgen Nacht', 'Donnerstag Nacht']);
+  assert.equal(planWhen(view, { startMs: Date.UTC(2026, 0, 14, 0, 30) }, { dayIdx: view.todayIdx }, false, zt), 'Am Mittwoch ab 0:30');
+  assert.deepEqual([1, 2, 3].map((k) => nightName(view, { dayIdx: k }, zt)), ['Heute Nacht', 'Morgen Nacht', 'Donnerstagnacht']);
   // Gegenprobe: mit Berlins Zeitzone läge derselbe Start schon am Mittwoch, eine Stunde später
-  assert.equal(whenPhrase(view, spaet, ztFor('Europe/Berlin')), 'Mittwoch ab 0:30');
+  assert.equal(whenPhrase(view, spaet, ztFor('Europe/Berlin')), 'am Mittwoch ab 0:30');
 });
 
 test('Beweis: whenPhrase, nightName und planWhen liefern unter jeder Prozess-Zeitzone denselben Text', () => {
@@ -831,19 +833,19 @@ test('currentOf: die Prognose-Stunde nach dem absoluten Zeitpunkt, auch in der d
 
 test('extentLine: Einheit aus dem Schlüssel, Kilometer nur, wenn beide Maße mindestens 1 km sind', () => {
   const fmt = { t: i18n.t, num: i18n.fmt.num };
-  assert.equal(extentLine({ w: 22.4, h: 27.6 }, fmt), 'Umriss etwa 22 × 28 m');
-  assert.equal(extentLine({ w: 2140, h: 1390 }, fmt), 'Umriss etwa 2,1 × 1,4 km');
+  assert.equal(extentLine({ w: 22.4, h: 27.6 }, fmt), 'Größe: etwa 22 × 28 m');
+  assert.equal(extentLine({ w: 2140, h: 1390 }, fmt), 'Größe: etwa 2,1 × 1,4 km');
   // schmal und lang: beide in Metern statt „0,0 × 1,2 km“
-  assert.equal(extentLine({ w: 15, h: 1200 }, fmt), 'Umriss etwa 15 × 1.200 m');
-  assert.equal(extentLine({ w: 1200, h: 40 }, fmt), 'Umriss etwa 1.200 × 40 m');
+  assert.equal(extentLine({ w: 15, h: 1200 }, fmt), 'Größe: etwa 15 × 1.200 m');
+  assert.equal(extentLine({ w: 1200, h: 40 }, fmt), 'Größe: etwa 1.200 × 40 m');
   // unter einem Meter je Seite wird 1 m; ohne Umriss oder ohne Fläche nichts
-  assert.equal(extentLine({ w: 0.4, h: 30 }, fmt), 'Umriss etwa 1 × 30 m');
+  assert.equal(extentLine({ w: 0.4, h: 30 }, fmt), 'Größe: etwa 1 × 30 m');
   assert.equal(extentLine({ w: 0, h: 0 }, fmt), '');
   assert.equal(extentLine(null, fmt), '');
   // echte Umrisse über geo.extentSize (wie geo.test.js): Marktstraße 1 und der Ortsteil Bürg
   const geo = Heizwarte.geo;
-  assert.equal(extentLine(geo.extentSize([9.3962769, 48.8773938, 9.3965767, 48.8771427], 48.8772683), fmt), 'Umriss etwa 22 × 28 m');
-  assert.match(extentLine(geo.extentSize([9.4324428, 48.8941292, 9.4627316, 48.870991], 48.8817501), fmt), /^Umriss etwa \d,\d × \d,\d km$/);
+  assert.equal(extentLine(geo.extentSize([9.3962769, 48.8773938, 9.3965767, 48.8771427], 48.8772683), fmt), 'Größe: etwa 22 × 28 m');
+  assert.match(extentLine(geo.extentSize([9.4324428, 48.8941292, 9.4627316, 48.870991], 48.8817501), fmt), /^Größe: etwa \d,\d × \d,\d km$/);
   // die Platzhalter bekommen nur Zahlen, die Einheit steckt im Schlüssel
   const gesehen = [];
   extentLine({ w: 22, h: 28 }, { t: (k, v) => { gesehen.push([k, v]); return k; }, num: i18n.fmt.num });
@@ -889,8 +891,8 @@ test('Stepper: Grenzen und Schrittweite wie in Abschnitt 7, Einheit und Beschrif
   // Zahl mit Einheit, wie der Stepper sie zeigt
   assert.equal(i18n.t('unitCelsius', { n: roundedNum(20.5) }), '20,5 °C');
   assert.equal(i18n.t('unitCelsius', { n: roundedNum(20) }), '20 °C');
-  assert.equal(i18n.t('unitHours', { n: roundedNum(3) }), '3 h');
-  assert.equal(i18n.t('unitHours', { n: roundedNum(0.5) }), '0,5 h');
+  assert.equal(i18n.t('unitHours', { n: roundedNum(3) }), '3 Std.');
+  assert.equal(i18n.t('unitHours', { n: roundedNum(0.5) }), '0,5 Std.');
 });
 
 test('Stepper: die Werte aller Heizarten liegen in den Grenzen, leadMin ≤ leadMax', () => {
@@ -1020,7 +1022,7 @@ test('Schwellen-Stepper: genau die acht Felder von heat.DEFAULT_THRESH, Standard
     assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.label), f + ': Beschriftung in de');
     assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.name), f + ': Hauptwort in de');
     assert.ok(Object.prototype.hasOwnProperty.call(i18n.I18N.de, s.unit), f + ': Einheit in de');
-    if (frost.includes(f)) { assert.equal(s.max, 0, f + ': über 0 °C wäre „Die Nacht bringt Frost.“ falsch'); }
+    if (frost.includes(f)) { assert.equal(s.max, 0, f + ': über 0 °C wäre „Eine der nächsten zwei Nächte bringt Frost.“ falsch'); }
   }
   // Temperaturen in °C, Veränderungen in Grad, Wind in km/h
   assert.deepEqual(SCHWELLEN.map((f) => THRESH_STEPPERS[f].unit),
@@ -1371,24 +1373,25 @@ test('airRows: vier Fenster in zeitlicher Reihenfolge, genau eines trägt airBes
   const { fmt } = airFmtFor(view);
   const rows = airRows(view.m, placeOf(PROF.floorScreed), fmt);
   assert.deepEqual(rows.slots.map((s) => s.text), [
-    'Gegen 10:00 Uhr lüften.', 'Gegen 11:00 Uhr lüften.', 'Gegen 12:00 Uhr lüften.', 'Gegen 13:00 Uhr lüften.'
+    'Gegen 10:00 lüften.', 'Gegen 11:00 lüften.', 'Gegen 12:00 lüften.', 'Gegen 13:00 lüften.'
   ]);
   assert.deepEqual(rows.slots.map((s) => s.best), [false, false, false, true]);
-  assert.deepEqual(rows.slots.map((s) => s.tag), ['', '', '', 'Bestes Fenster']);
+  assert.deepEqual(rows.slots.map((s) => s.tag), ['', '', '', 'Beste Zeit']);
   assert.equal(rows.none, '', 'mit Fenstern entfällt airNone');
 });
 
 test('airRows: der Erklärsatz nennt den Taupunkt der Raumluft und die Wunschtemperatur des Orts', () => {
   const view = viewAt('om-lueften.json', JAN13_MS);
   const rows = airRows(view.m, placeOf(PROF.floorScreed), airFmtFor(view).fmt);
-  assert.equal(rows.note, 'Draußen ist die Luft trockener als drinnen, wenn ihr Taupunkt unter etwa 10,7° liegt ' +
-    '(Raum 20 °C bei 55 % Luftfeuchte). Dann trägt jedes Lüften Feuchtigkeit hinaus.');
+  assert.equal(rows.note, 'Lüften hilft nur, wenn die Luft draußen trockener ist als drinnen, dann trägt sie Feuchtigkeit ' +
+    'hinaus. Das Maß dafür ist der Taupunkt: Liegt er draußen unter etwa 10,7°, passt es. Heizwarte rechnet mit 20 °C und 55 % ' +
+    'Luftfeuchte im Raum.');
   // ein kühleres Zimmer hat den niedrigeren Raumtaupunkt, und eine halbe Zahl steht mit Komma da
   const kuehl = airRows(view.m, placeOf(Object.assign({}, PROF.floorScreed, { comfort: 17 })), airFmtFor(view).fmt);
   assert.ok(kuehl.note.includes(i18n.fmt.deg(heat.dewPoint(17, 55), 1)), kuehl.note);
-  assert.ok(kuehl.note.includes('Raum 17 °C'), kuehl.note);
+  assert.ok(kuehl.note.includes('mit 17 °C'), kuehl.note);
   const halb = airRows(view.m, placeOf(Object.assign({}, PROF.floorScreed, { comfort: 20.5 })), airFmtFor(view).fmt);
-  assert.ok(halb.note.includes('Raum 20,5 °C'), halb.note);
+  assert.ok(halb.note.includes('mit 20,5 °C'), halb.note);
 });
 
 test('airRows: zu feuchte Außenluft ergibt kein Fenster, dafür airNone; der Erklärsatz bleibt', () => {
@@ -1397,8 +1400,8 @@ test('airRows: zu feuchte Außenluft ergibt kein Fenster, dafür airNone; der Er
   nass.hours.forEach((o) => { o.dew += 20; });
   const rows = airRows(nass, placeOf(PROF.floorScreed), airFmtFor(view).fmt);
   assert.deepEqual(rows.slots, []);
-  assert.equal(rows.none, 'Heute kein gutes Fenster mehr. Kurz querlüften reicht.');
-  assert.ok(rows.note.startsWith('Draußen ist die Luft trockener'), rows.note);
+  assert.equal(rows.none, 'Heute keine gute Zeit mehr zum Lüften. Ein kurzer Durchzug reicht.');
+  assert.ok(rows.note.startsWith('Lüften hilft nur'), rows.note);
 });
 
 test('airRows: heat.airSlots bekommt Modell, Jetzt und das Heizprofil des Orts; ohne Profil gilt 20 °C', () => {
@@ -1413,7 +1416,7 @@ test('airRows: heat.airSlots bekommt Modell, Jetzt und das Heizprofil des Orts; 
   // ein Ort ohne Heizprofil und eins ohne Wunschtemperatur: der Rückfall ist die Wunschtemperatur 20 °C
   for (const ort of [{ id: 'x', label: 'Opa', cc: 'DE' }, placeOf({ type: 'radiator' }), null]) {
     const rows = airRows(view.m, ort, airFmtFor(view).fmt);
-    assert.ok(rows.note.includes('Raum 20 °C'), JSON.stringify(ort) + ': ' + rows.note);
+    assert.ok(rows.note.includes('mit 20 °C'), JSON.stringify(ort) + ': ' + rows.note);
     assert.ok(rows.note.includes('10,7°'), rows.note);
     assert.equal(rows.slots.length, 4);
   }
@@ -1546,7 +1549,7 @@ test('chartRows: der Satz nennt Tiefst- und Höchstwert mit einer Nachkommastell
     maxWhen: f.when(view.sum.maxMs, view.now.ms, view.m.tz, 'de')
   });
   assert.equal(rows.summary, soll);
-  assert.match(rows.summary, /^Tiefster Wert −\d+,\d° \((?:heute|morgen|übermorgen|Donnerstag|Freitag|Samstag|Sonntag|Montag|Dienstag|Mittwoch)[^)]* \d{1,2}:\d{2}\), höchster Wert \d+,\d° \(/);
+  assert.match(rows.summary, /^Tiefstwert −\d+,\d° \((?:heute|morgen|übermorgen|Donnerstag|Freitag|Samstag|Sonntag|Montag|Dienstag|Mittwoch)[^)]* \d{1,2}:\d{2}\), Höchstwert \d+,\d° \(/);
   assert.doesNotMatch(rows.summary, /NaN|undefined|\{/);
   // ohne Zusammenfassung (zu alte Daten) kein Satz, die Legende bleibt
   assert.equal(chartRows(view.m, null, chartFmtFor(view), true).summary, '');

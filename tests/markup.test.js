@@ -354,7 +354,7 @@ test('Kopfzeile: Ortswahl mit sichtbarer Beschriftung, zwei Textknöpfe mit Schl
   }
   // der Hinweis zur angenommenen Heizart bleibt mit seinem Knopf erhalten
   assert.equal(byId.get('heatHint').attrs.hidden, '');
-  assert.equal(byId.get('btnHeatChange').attrs['data-i18n'], 'btnChange');
+  assert.equal(byId.get('btnHeatChange').attrs['data-i18n'], 'btnChangeHeat');
 });
 
 test('Jetzt, Ampel, Warnungen, Tage: die Bausteine, die app.js füllt, stehen im Markup', () => {
@@ -793,7 +793,7 @@ test('Statuszeile: CSS trägt „⚠ Veraltet“ in der Warnfarbe, Symbol und Wo
   }
   // jeder Satz der Gruppe, der „veraltet“ meldet, beginnt mit dem Symbol (nie die Farbe allein)
   for (const k of ['statusStale', 'statusOffline', 'statusRateLimited', 'errLoadFailed']) {
-    assert.match(de[k], /^⚠ Veraltet – /, k);
+    assert.match(de[k], /^⚠ Veraltet, /, k);
   }
 });
 
@@ -855,11 +855,11 @@ test('Fußzeile: CSS macht den Link zum Inline-Block mit Tippfläche, blendet de
   assert.match(css, /footer a\.footer-link\s*\{[^}]*text-decoration: underline;/, 'Link nie nur durch Farbe kenntlich');
 });
 
-test('Fußzeile: die Texte nennen Quelle und Lizenz, die Datenschutzzeile trägt die Klammer mit dem gerundeten Standort', () => {
+test('Fußzeile: die Texte nennen Quelle und Lizenz, die Datenschutzzeile nennt den gerundeten Standort', () => {
   assert.match(de.footerWeather, /Open-Meteo\.com \(CC BY 4\.0\)/);
   assert.match(de.footerElev, /Copernicus-Programms/);
   assert.match(de.footerCode, /\(MIT\), © 2026 Dennismit2n/);
-  assert.match(de.footerPrivacy, /\(oder einmal dein auf etwa 100 m gerundeter Standort\)/);
+  assert.match(de.footerPrivacy, /oder dein auf etwa 100 m gerundeter Standort geht einmal zur Ortssuche raus/);
   assert.equal(de.footerExternal, 'öffnet fremde Seite');
 });
 
@@ -1095,7 +1095,7 @@ test('Einstellungen: Höhe mit Anzeige, Ändern-Knopf und Feld nach den Regeln v
   assert.equal(byId.get('settingsElevAuto').attrs['data-i18n'], 'setupElevAuto');
   assert.equal(byId.get('settingsElevAuto').attrs.hidden, '');
   const knopf = byId.get('btnSettingsElev');
-  assert.equal(knopf.attrs['data-i18n'], 'btnChange');
+  assert.equal(knopf.attrs['data-i18n'], 'btnChangeElev');
   assert.equal(knopf.attrs['aria-expanded'], 'false');
   assert.equal(knopf.attrs['aria-controls'], 'settingsElevEdit');
   assert.equal(byId.get('settingsElevEdit').attrs.hidden, '', 'das Feld ist erst nach „Ändern“ da');
@@ -1226,7 +1226,7 @@ test('Einstellungen: jede ID der Stepper steht im Markup, alle Schlüssel der St
     'settingsPlaceActive', 'settingsPlaces', 'settingsHeat', 'settingsElev', 'errElevRange']) {
     assert.ok(has(de, k), k + ' fehlt in de');
   }
-  assert.match(de.unitHours, /^\{n\} h$/);
+  assert.match(de.unitHours, /^\{n\} Std\.$/);
   assert.match(de.unitCelsius, /^\{n\} °C$/);
 });
 
