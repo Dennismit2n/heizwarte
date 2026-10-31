@@ -1598,7 +1598,8 @@ test('Fall 14: die Stufenzeile enthält „Stufe“, die Zahl und das Wort als T
 
 // ---------------------------------------------------------------------------------------------
 // Fall 13: Theme System/Hell/Dunkel (BAUPLAN Abschnitt 8, „Theme ab M3“). Playwright meldet ohne Angabe „hell“; jeder
-// Test legt das System deshalb mit page.emulateMedia fest. Gemessen wird am Ergebnis: data-theme, hw:theme (JSON),
+// Test legt das System deshalb mit page.emulateMedia fest. Gemessen wird am Ergebnis: data-theme, werkstatt.darstellung
+// (roher Text, gilt seit den Sehhilfen vom 31.10.2026 in allen Werkzeugen; hw:theme ist nur noch Rückfall),
 // beide theme-color-Metas und die Variable --bg, die der CSS-Block des gewählten Themes setzt.
 // ---------------------------------------------------------------------------------------------
 
@@ -1613,7 +1614,7 @@ function themeState(page) {
     const css = getComputedStyle(html);
     return {
       attr: html.getAttribute('data-theme'),
-      stored: localStorage.getItem('hw:theme'),
+      stored: localStorage.getItem('werkstatt.darstellung'),
       metas: Array.from(document.querySelectorAll('meta[name="theme-color"]')).map((m) => m.getAttribute('content')),
       bg: css.getPropertyValue('--bg').trim(),
       scheme: css.colorScheme
@@ -1621,7 +1622,7 @@ function themeState(page) {
   });
 }
 
-test('Fall 13: themeSelect schaltet System, Hell und Dunkel; data-theme, hw:theme und beide theme-color-Metas folgen, Reload → bleibt', async ({ page }) => {
+test('Fall 13: themeSelect schaltet System, Hell und Dunkel; data-theme, werkstatt.darstellung und beide theme-color-Metas folgen, Reload → bleibt', async ({ page }) => {
   const net = await mockNet(page);
   await page.emulateMedia({ colorScheme: 'dark' });
   await startClock(page);
@@ -1634,38 +1635,39 @@ test('Fall 13: themeSelect schaltet System, Hell und Dunkel; data-theme, hw:them
   const select = page.locator('#themeSelect');
   await expect(select).toHaveValue('system');
   await expect(page.locator('label[for=themeSelect]')).toHaveText(deText('themeLabel'));
-  await expect(select.locator('option')).toHaveText([deText('themeSystem'), deText('themeLight'), deText('themeDark')]);
+  await expect(select.locator('option')).toHaveText([deText('themeSystem'), deText('themeLight'), deText('themeDark'),
+    deText('themeHcDark'), deText('themeHcLight'), deText('themeCvdDark'), deText('themeCvdLight'), deText('themeInvert')]);
   const box = await select.boundingBox();
   expect(box.height, 'Auswahl mindestens 48 px hoch').toBeGreaterThanOrEqual(48);
 
-  // Hell: sofort, auch gegen das dunkle System; gespeichert als JSON
+  // Hell: sofort, auch gegen das dunkle System; gespeichert als roher Text
   await select.selectOption('light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  expect(await themeState(page)).toEqual({ attr: 'light', stored: '"light"', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+  expect(await themeState(page)).toEqual({ attr: 'light', stored: 'light', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
 
   // Reload: bleibt, und die Auswahl zeigt es beim nächsten Öffnen
   await page.reload();
   await expect(page.locator('#s-main')).toBeVisible();
-  expect(await themeState(page)).toEqual({ attr: 'light', stored: '"light"', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+  expect(await themeState(page)).toEqual({ attr: 'light', stored: 'light', metas: [TON_HELL, TON_HELL], bg: BG_HELL, scheme: 'light' });
   await openSettings(page);
   await expect(select).toHaveValue('light');
 
   // Dunkel: gilt auch, wenn das System hell ist
   await page.emulateMedia({ colorScheme: 'light' });
   await select.selectOption('dark');
-  expect(await themeState(page)).toEqual({ attr: 'dark', stored: '"dark"', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
+  expect(await themeState(page)).toEqual({ attr: 'dark', stored: 'dark', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
   await page.reload();
-  expect(await themeState(page)).toEqual({ attr: 'dark', stored: '"dark"', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
+  expect(await themeState(page)).toEqual({ attr: 'dark', stored: 'dark', metas: [TON_DUNKEL, TON_DUNKEL], bg: BG_DUNKEL, scheme: 'dark' });
 
-  // System: Attribut und Schlüssel weg, die Metas bekommen ihre Töne zurück, das System (hier hell) entscheidet
+  // System: Attribut weg, gespeichert ist „system“, die Metas bekommen ihre Töne zurück, das System (hier hell) entscheidet
   await openSettings(page);
   await expect(select).toHaveValue('dark');
   await select.selectOption('system');
-  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_HELL, scheme: 'light' });
+  expect(await themeState(page)).toEqual({ attr: null, stored: 'system', metas: [TON_DUNKEL, TON_HELL], bg: BG_HELL, scheme: 'light' });
   await page.emulateMedia({ colorScheme: 'dark' });
-  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+  expect(await themeState(page)).toEqual({ attr: null, stored: 'system', metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
   await page.reload();
-  expect(await themeState(page)).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+  expect(await themeState(page)).toEqual({ attr: null, stored: 'system', metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);
 });
 
@@ -1699,7 +1701,8 @@ test('Fall 13: ein Wert unter hw:theme, der kein JSON "light" oder "dark" ist, l
   for (const roh of ['light', '"Hell"', '"system"', '{"theme":"light"}']) {
     await page.addInitScript((wert) => { try { localStorage.setItem('hw:theme', wert); } catch (e) { /* ohne Speicher gibt es nichts zu setzen */ } }, roh);
     await page.goto('/');
-    expect(await themeState(page), roh).toEqual({ attr: null, stored: roh, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+    expect(await themeState(page), roh).toEqual({ attr: null, stored: null, metas: [TON_DUNKEL, TON_HELL], bg: BG_DUNKEL, scheme: 'dark' });
+    expect(await page.evaluate(() => localStorage.getItem('hw:theme')), 'hw:theme bleibt, wie er war').toBe(roh);
     await expect(page.locator('#s-welcome')).toBeVisible();
   }
   expect(net.log.stray, 'Anfragen ohne Route').toEqual([]);

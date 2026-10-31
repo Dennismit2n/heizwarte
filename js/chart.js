@@ -23,8 +23,19 @@
   // Prüfung ergab keinen Anlass, sie zu ändern (kleinstes Verhältnis 5,74:1 bei 10 °C auf #F3F3F6).
   const ANCH_LIGHT = [[-10, 42, 0.14, 275], [0, 45, 0.11, 245], [10, 48, 0.05, 210], [18, 46, 0.08, 90], [25, 46, 0.16, 58], [32, 44, 0.20, 28]];
 
+  // Sehhilfen der Werkstatt (31.10.2026), gleiche C und H, nur L verschoben, über ein Halbgrad-Raster von −12 bis 34 °C
+  // gerechnet (farbe.mjs der Sehhilfen-Runde, Chroma-Abbildung wie im Browser):
+  //  - Hoher Kontrast dunkel: jede Stufe mindestens 7,3:1 auf Schwarz (−10 °C von L 62 auf 69, 32 °C von 63 auf 70,5),
+  //  - Hoher Kontrast hell: jede Stufe mindestens 7,3:1 auf Weiß,
+  //  - Umgekehrte Farben im Dunkeln: die Seite wird per filter: invert(1) gedreht, und umgedreht fiele die Skala bis
+  //    auf 1,96:1. Mit diesen Ankern hält jede Stufe NACH dem Umdrehen 4,7:1 gegen den gedrehten Grund, auch mit
+  //    geklemmten Kanälen wie in tests/_farbe.js (32 °C dafür von L 63 auf 84,5).
+  const ANCH_HC_DARK = [[-10, 69, 0.13, 275], [0, 72, 0.11, 245], [10, 85, 0.05, 210], [18, 88, 0.08, 90], [25, 76, 0.16, 58], [32, 70.5, 0.20, 28]];
+  const ANCH_HC_LIGHT = [[-10, 42, 0.14, 275], [0, 44.5, 0.11, 245], [10, 44.5, 0.05, 210], [18, 44, 0.08, 90], [25, 46, 0.16, 58], [32, 44, 0.20, 28]];
+  const ANCH_INV_DARK = [[-10, 71.5, 0.13, 275], [0, 72.5, 0.11, 245], [10, 85, 0.05, 210], [18, 88, 0.08, 90], [25, 78.5, 0.16, 58], [32, 84.5, 0.20, 28]];
+
   // scheme → Ankertabelle; ein unbekanntes scheme gilt als dunkel (Standard der App, Dennis ist lichtempfindlich)
-  const ANCHORS = { dark: ANCH_DARK, light: ANCH_LIGHT };
+  const ANCHORS = { dark: ANCH_DARK, light: ANCH_LIGHT, 'hc-dark': ANCH_HC_DARK, 'hc-light': ANCH_HC_LIGHT, 'inv-dark': ANCH_INV_DARK };
 
   // Neutrale Mitte der Skala für Werte ohne Zahl
   const NEUTRAL_C = 10;
@@ -32,9 +43,10 @@
   // Farbe zur Temperatur t (°C) als 'oklch(L% C H[ / a])'. Formel wie Bürg index:224–228: Segment suchen,
   // L, C und H linear mischen. Der Farbton läuft numerisch linear, nicht auf dem kürzeren Kreisbogen
   // (210 → 90 läuft über 150, Grün); unter −10 und über 32 bleibt die Farbe auf dem Randanker.
-  // Kein Wert (null, NaN) ergibt die neutrale Mitte statt 'oklch(NaN% …)'. scheme 'dark' (Standard) oder 'light'.
+  // Kein Wert (null, NaN) ergibt die neutrale Mitte statt 'oklch(NaN% …)'. scheme 'dark' (Standard), 'light',
+  // 'hc-dark', 'hc-light' oder 'inv-dark' (app.js currentScheme).
   function tcol(t, alpha, scheme) {
-    const A = scheme === 'light' ? ANCHORS.light : ANCHORS.dark;
+    const A = Object.prototype.hasOwnProperty.call(ANCHORS, scheme) ? ANCHORS[scheme] : ANCHORS.dark;
     const x = typeof t === 'number' && Number.isFinite(t) ? t : NEUTRAL_C;
     let i = 0;
     if (x <= A[0][0]) { i = 0; }
@@ -187,7 +199,7 @@
   //                    verdict.nights (atMs, min)
   //   now              weather.localNow(): Marke „jetzt“ (now.ms)
   //   opts.width       Breite der Zeichenfläche in Pixeln, geklemmt auf 320 bis 720 (Rückfall 720)
-  //   opts.scheme      'dark' (Standard) oder 'light'
+  //   opts.scheme      'dark' (Standard), 'light', 'hc-dark', 'hc-light' oder 'inv-dark' (eine Ankertabelle)
   //   opts.labels      { today, tomorrow, now, wday(ms), hour(ms) }: fertige Texte der Sprache (wday ist der lange
   //                    Wochentag, hour die Uhrzeit einer Stundenmarke in der Ortszeit; ohne hour steht die Ortsstunde)
   //   opts.fmt         { deg(x, digits) }: Grad mit „°“ in der Sprache
@@ -196,7 +208,7 @@
   // zweite Meinung gezeichnet). Ohne Fenster: markup '' und leere Listen.
   function layout(model, verdict, now, opts) {
     const o = opts || {};
-    const scheme = o.scheme === 'light' ? 'light' : 'dark';
+    const scheme = Object.prototype.hasOwnProperty.call(ANCHORS, o.scheme) ? o.scheme : 'dark';
     const labels = o.labels || {};
     const fmt = o.fmt || {};
     const deg = typeof fmt.deg === 'function' ? fmt.deg : (v) => f2(v) + '°';

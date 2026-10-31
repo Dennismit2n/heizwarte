@@ -285,6 +285,11 @@
       themeSystem: 'System',
       themeLight: 'Hell',
       themeDark: 'Dunkel',
+      themeHcDark: 'Hoher Kontrast dunkel',
+      themeHcLight: 'Hoher Kontrast hell',
+      themeCvdDark: 'Farbenblind dunkel',
+      themeCvdLight: 'Farbenblind hell',
+      themeInvert: 'Umgekehrte Farben',
       langLabel: 'Sprache',
 
       // --- Fußzeile (Quellenangaben nach KT §3.4, §4, §5.2, §6.3) ---
