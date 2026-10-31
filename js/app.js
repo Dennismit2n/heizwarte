@@ -2642,11 +2642,35 @@
     $('themeSelect').value = shownChoice;
   }
 
+  // Sprachwahl: ein Eintrag je Block in i18n.I18N, in der Reihenfolge von i18n.LANGS, jede Sprache mit ihrem
+  // eigenen Namen (_name) und lang-Attribut, damit Vorleser „Deutsch“ deutsch und „日本語“ japanisch sprechen
+  function renderLang() {
+    const sel = $('langSelect');
+    if (!sel.options.length) {
+      for (const code of i18n.LANGS) {
+        const table = i18n.I18N[code];
+        if (!table) { continue; }
+        const opt = document.createElement('option');
+        opt.value = code;
+        opt.lang = code;
+        opt.textContent = table._name;
+        sel.appendChild(opt);
+      }
+    }
+    sel.value = i18n.lang;
+  }
+
+  // apply() speichert die Wahl (hw:lang) und ruft onLanguage, das den Bildschirm neu zeichnet
+  function onLang() {
+    i18n.apply($('langSelect').value);
+  }
+
   function renderSettings() {
     guard(renderSettingsPlaces);
     guard(renderPlacesError);
     guard(renderSettingsActive);
     guard(renderTheme);
+    guard(renderLang);
   }
 
   function onSettingsOpen() {
@@ -2776,6 +2800,7 @@
     }
     on('btnThreshReset', 'click', onThreshReset);
     on('themeSelect', 'change', onTheme);
+    on('langSelect', 'change', onLang);
     on('btnSettingsElev', 'click', () => openSettingsElev($('settingsElevEdit').hidden));
     on('settingsElevInput', 'change', onElevCommit);
     on('settingsElevInput', 'input', clearElevError);
