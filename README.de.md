@@ -24,7 +24,7 @@ Die Ampel schaut auf die nächsten zwei Nächte und hat vier Stufen: Ruhig, Vorw
 
 ## Sprachen
 
-Deutsch, Englisch, Spanisch, Französisch, Italienisch, Niederländisch, Polnisch, Portugiesisch, Türkisch, Russisch, Hindi, Chinesisch, Japanisch und Koreanisch. Heizwarte folgt der Sprache deines Browsers, umstellen kannst du sie in den Einstellungen. Die Warnungen des Deutschen Wetterdienstes gibt es nur auf Deutsch und Englisch, in den anderen Sprachen steht dort der englische Wortlaut. Die Übersetzungen sind maschinell entstanden, Korrekturen nehme ich gern an.
+Deutsch, Englisch, Spanisch, Französisch, Italienisch, Niederländisch, Polnisch, Portugiesisch, Türkisch, Russisch, Hindi, Chinesisch, Japanisch und Koreanisch. Heizwarte folgt der Sprache deines Browsers, umstellen kannst du sie in den Einstellungen. Ist deine Sprache nicht dabei, startet Heizwarte auf Deutsch. Die Warnungen des Deutschen Wetterdienstes gibt es nur auf Deutsch und Englisch, in den anderen Sprachen steht dort der englische Wortlaut. Die Übersetzungen sind maschinell entstanden, Korrekturen nehme ich gern an.
 
 ## Was dein Gerät verlässt
 
