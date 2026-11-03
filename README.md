@@ -24,7 +24,7 @@ The traffic light looks at the next two nights and has four levels: “Calm”, 
 
 ## Languages
 
-German, English, Spanish, French, Italian, Dutch, Polish, Portuguese, Turkish, Russian, Hindi, Chinese, Japanese and Korean. Heizwarte follows your browser’s language, you can change it in the settings. Warnings from Deutscher Wetterdienst only come in German and English, in the other languages you see the English wording. The translations are machine-made, I’m happy to take corrections.
+German, English, Spanish, French, Italian, Dutch, Polish, Portuguese, Turkish, Russian, Hindi, Chinese, Japanese and Korean. Heizwarte follows your browser’s language, you can change it in the settings. If your language isn’t one of them, Heizwarte starts in German. Warnings from Deutscher Wetterdienst only come in German and English, in the other languages you see the English wording. The translations are machine-made, I’m happy to take corrections.
 
 ## What leaves your device
 
