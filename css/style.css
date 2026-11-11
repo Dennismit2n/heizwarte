@@ -1311,9 +1311,7 @@ footer a.footer-link {
    vier kleine Schrauben in Weißgold, wie die Kacheln der Startseite. Licht von rechts
    oben, darum fallen die Schatten nach links unten. Der Beschlag liegt als acht
    Hintergrund-Ebenen (--beschlag: vier Schrauben, vier Linien) vor dem eigenen Grund
-   jedes Bauteils. Die Schrauben liegen hier als Dateien in assets/, weil die
-   Sicherheitsrichtlinie der Seite (img-src 'self') eingebettete Bilder sperrt.
-   --bi Abstand des Rahmens von der Innenkante, --bg Schraubengröße,
+   jedes Bauteils. --bi Abstand des Rahmens von der Innenkante, --bg Schraubengröße,
    --ba Abstand der Schraube vom Rahmen, --bl Linienfarbe. Gebaut mit einbau.py. */
 :root {
   --schraube-1: url("../assets/schraube-1.svg");
@@ -1434,4 +1432,7 @@ select {
 }
 /* Hoher Kontrast kennt keine Schatten, der Beschlag bleibt. Gedruckt wird ohne beides. */
 :root[data-vision="contrast"] :is(button, .card, .choice, .verdict, .day, .plan-item, .air-slot, .place-item, .advanced) { box-shadow: none; }
+@media print {
+  button, input[type="text"], input[type="number"], select, .card, .choice, .notice, .verdict, .day, .plan-item, .air-slot, .place-item, .advanced { background-image: none !important; box-shadow: none !important; }
+}
 /* Ende Beschlag */
