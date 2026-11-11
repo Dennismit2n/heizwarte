@@ -4,7 +4,7 @@ Wetter mit Heiz-Ampel. Heizwarte sagt dir, wann du die Heizung hochstellen musst
 
 Live: https://dennismit2n.github.io/heizwarte/ · [English version](README.md)
 
-<img src="assets/screenshot-de.webp" alt="Die Startansicht von Heizwarte für Berlin, dunkel: oben das Wetter jetzt mit 6 Grad, darunter die Heiz-Ampel auf Stufe 1 „Vorwarnung“ mit dem Satz „Heizung jetzt höher stellen.“, dann heute und die nächsten zwei Tage mit Tiefst- und Höchstwerten und unten der Heizfahrplan für Heizkörper mit „Start fällig“ für heute Nacht." width="600">
+<img src="assets/screenshot-de.webp" alt="Die Startansicht von Heizwarte für Berlin, dunkel: oben das Wetter jetzt, darunter die Heiz-Ampel mit ihrer Stufe und dem Satz, was zu tun ist, dann heute und die nächsten zwei Tage mit Tiefst- und Höchstwerten und unten der Heizfahrplan für Heizkörper." width="600">
 
 ## Die Heiz-Ampel
 

@@ -4,7 +4,7 @@ Weather with a heating traffic light. Heizwarte tells you when to turn up the he
 
 Live: https://dennismit2n.github.io/heizwarte/ · [Deutsche Fassung](README.de.md)
 
-<img src="assets/screenshot-en.webp" alt="The Heizwarte start view for Berlin in dark mode: at the top the weather now at 6 degrees, below it the heating traffic light at level 1 “Early warning” with “Turn the heating up now.”, then today and the next two days with lows and highs, and at the bottom the heating schedule for radiators with “Start due” for tonight." width="600">
+<img src="assets/screenshot-en.webp" alt="The Heizwarte start view for Berlin in dark mode: at the top the weather right now, below it the heating traffic light with its level and the sentence telling you what to do, then today and the next two days with lows and highs, and at the bottom the heating schedule for radiators." width="600">
 
 ## The heating traffic light
 
