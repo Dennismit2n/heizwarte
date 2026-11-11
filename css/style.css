@@ -1311,8 +1311,9 @@ footer a.footer-link {
    vier kleine Schrauben in Weißgold, wie die Kacheln der Startseite. Licht von rechts
    oben, darum fallen die Schatten nach links unten. Der Beschlag liegt als acht
    Hintergrund-Ebenen (--beschlag: vier Schrauben, vier Linien) vor dem eigenen Grund
-   jedes Bauteils. --bi Abstand des Rahmens von der Innenkante, --bg Schraubengröße,
-   --ba Abstand der Schraube vom Rahmen, --bl Linienfarbe. Gebaut mit einbau.py. */
+   jedes Bauteils. Die Namen beginnen mit bsl-, weil viele Werkzeuge --bg selbst
+   für ihre Hintergrundfarbe benutzen. --bsl-i Abstand des Rahmens von der Innenkante, --bsl-g Schraubengröße,
+   --bsl-a Abstand der Schraube vom Rahmen, --bsl-l Linienfarbe. Gebaut mit einbau.py. */
 :root {
   --schraube-1: url("../assets/schraube-1.svg");
   --schraube-2: url("../assets/schraube-2.svg");
@@ -1332,101 +1333,101 @@ select,
 .air-slot,
 .place-item,
 .advanced {
-  --bi: 2px;
-  --bg: 4.5px;
-  --ba: 1px;
-  --bl: currentColor;
+  --bsl-i: 2px;
+  --bsl-g: 4.5px;
+  --bsl-a: 1px;
+  --bsl-l: currentColor;
   --beschlag:
-    var(--schraube-1) left calc(var(--bi) + var(--ba)) top calc(var(--bi) + var(--ba)) / var(--bg) var(--bg) no-repeat,
-    var(--schraube-2) right calc(var(--bi) + var(--ba)) top calc(var(--bi) + var(--ba)) / var(--bg) var(--bg) no-repeat,
-    var(--schraube-3) left calc(var(--bi) + var(--ba)) bottom calc(var(--bi) + var(--ba)) / var(--bg) var(--bg) no-repeat,
-    var(--schraube-4) right calc(var(--bi) + var(--ba)) bottom calc(var(--bi) + var(--ba)) / var(--bg) var(--bg) no-repeat,
-    linear-gradient(var(--bl), var(--bl)) center top var(--bi) / calc(100% - 2 * var(--bi)) 1px no-repeat,
-    linear-gradient(var(--bl), var(--bl)) center bottom var(--bi) / calc(100% - 2 * var(--bi)) 1px no-repeat,
-    linear-gradient(var(--bl), var(--bl)) left var(--bi) center / 1px calc(100% - 2 * var(--bi)) no-repeat,
-    linear-gradient(var(--bl), var(--bl)) right var(--bi) center / 1px calc(100% - 2 * var(--bi)) no-repeat;
+    var(--schraube-1) left calc(var(--bsl-i) + var(--bsl-a)) top calc(var(--bsl-i) + var(--bsl-a)) / var(--bsl-g) var(--bsl-g) no-repeat,
+    var(--schraube-2) right calc(var(--bsl-i) + var(--bsl-a)) top calc(var(--bsl-i) + var(--bsl-a)) / var(--bsl-g) var(--bsl-g) no-repeat,
+    var(--schraube-3) left calc(var(--bsl-i) + var(--bsl-a)) bottom calc(var(--bsl-i) + var(--bsl-a)) / var(--bsl-g) var(--bsl-g) no-repeat,
+    var(--schraube-4) right calc(var(--bsl-i) + var(--bsl-a)) bottom calc(var(--bsl-i) + var(--bsl-a)) / var(--bsl-g) var(--bsl-g) no-repeat,
+    linear-gradient(var(--bsl-l), var(--bsl-l)) center top var(--bsl-i) / calc(100% - 2 * var(--bsl-i)) 1px no-repeat,
+    linear-gradient(var(--bsl-l), var(--bsl-l)) center bottom var(--bsl-i) / calc(100% - 2 * var(--bsl-i)) 1px no-repeat,
+    linear-gradient(var(--bsl-l), var(--bsl-l)) left var(--bsl-i) center / 1px calc(100% - 2 * var(--bsl-i)) no-repeat,
+    linear-gradient(var(--bsl-l), var(--bsl-l)) right var(--bsl-i) center / 1px calc(100% - 2 * var(--bsl-i)) no-repeat;
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  button { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  button { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 button {
-  --bi: 3.5px;
-  --bg: 4.5px;
-  --ba: 1px;
+  --bsl-i: 3.5px;
+  --bsl-g: 4.5px;
+  --bsl-a: 1px;
   background: var(--beschlag), var(--surface);
   box-shadow: -3px 4px 8px -4px rgba(0, 0, 0, 0.5);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  input[type="text"], input[type="number"], select { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  input[type="text"], input[type="number"], select { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 input[type="text"],
 input[type="number"],
 select {
-  --bi: 3px;
-  --bg: 4.5px;
-  --ba: 1px;
+  --bsl-i: 3px;
+  --bsl-g: 4.5px;
+  --bsl-a: 1px;
   background: var(--beschlag), var(--bg);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .card { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .card { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 .card {
-  --bi: 5px;
-  --bg: 7px;
-  --ba: 2px;
+  --bsl-i: 5px;
+  --bsl-g: 7px;
+  --bsl-a: 2px;
   background: var(--beschlag), var(--surface);
   box-shadow: -12px 14px 30px -6px rgba(0, 0, 0, 0.34);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .choice { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .choice { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 .choice {
-  --bi: 4px;
-  --bg: 5px;
-  --ba: 1.5px;
+  --bsl-i: 4px;
+  --bsl-g: 5px;
+  --bsl-a: 1.5px;
   background: var(--beschlag), var(--surface);
   box-shadow: -3px 4px 8px -4px rgba(0, 0, 0, 0.5);
 }
 .choice:has(input:checked) { background: var(--beschlag), color-mix(in oklch, var(--accent) 12%, var(--surface)); }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .notice { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .notice { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 .notice {
-  --bi: 4px;
-  --bg: 5px;
-  --ba: 1.5px;
+  --bsl-i: 4px;
+  --bsl-g: 5px;
+  --bsl-a: 1.5px;
   background: var(--beschlag), var(--surface);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .verdict { --bl: color-mix(in srgb, var(--lv, var(--accent)) 45%, transparent); }
+  .verdict { --bsl-l: color-mix(in srgb, var(--lv, var(--accent)) 45%, transparent); }
 }
 .verdict {
-  --bi: 6px;
-  --bg: 6px;
-  --ba: 1.5px;
+  --bsl-i: 6px;
+  --bsl-g: 6px;
+  --bsl-a: 1.5px;
   background: var(--beschlag), color-mix(in oklch, var(--lv, var(--line)) 9%, var(--bg));
   box-shadow: -6px 8px 18px -8px rgba(0, 0, 0, 0.42);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .day, .plan-item, .air-slot, .place-item { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .day, .plan-item, .air-slot, .place-item { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 .day,
 .plan-item,
 .air-slot,
 .place-item {
-  --bi: 5px;
-  --bg: 5px;
-  --ba: 1px;
+  --bsl-i: 5px;
+  --bsl-g: 5px;
+  --bsl-a: 1px;
   background: var(--beschlag), var(--surface);
   box-shadow: -6px 8px 18px -8px rgba(0, 0, 0, 0.42);
 }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
-  .advanced { --bl: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .advanced { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
 .advanced {
-  --bi: 5px;
-  --bg: 5px;
-  --ba: 1px;
+  --bsl-i: 5px;
+  --bsl-g: 5px;
+  --bsl-a: 1px;
   background: var(--beschlag), var(--surface);
   box-shadow: -6px 8px 18px -8px rgba(0, 0, 0, 0.42);
 }
