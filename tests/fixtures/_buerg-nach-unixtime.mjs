@@ -14,14 +14,15 @@
  *
  * Aufruf (nur wenn die Fixture neu entstehen soll):
  *   node tests/fixtures/_buerg-nach-unixtime.mjs [Pfad zum Bürg-Ordner]
- * Standard für den Ordner: C:/Users/nutzer/source/repos/dennismit2n.github.io/heizwarte (oder Umgebungsvariable BUERG).
+ * Standard für den Ordner: <Nutzerordner>/source/repos/dennismit2n.github.io/heizwarte (oder Umgebungsvariable BUERG).
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HIER = path.dirname(fileURLToPath(import.meta.url));
-const BUERG = process.argv[2] || process.env.BUERG || 'C:/Users/nutzer/source/repos/dennismit2n.github.io/heizwarte';
+const BUERG = process.argv[2] || process.env.BUERG || path.join(os.homedir(), 'source', 'repos', 'dennismit2n.github.io', 'heizwarte');
 const AUS = path.join(HIER, 'om-buerg-2026-10-09.json');
 
 const html = fs.readFileSync(path.join(BUERG, 'index.html'), 'utf8');
