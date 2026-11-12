@@ -1408,6 +1408,7 @@ select {
   background: var(--beschlag), color-mix(in oklch, var(--lv, var(--line)) 9%, var(--bg));
   box-shadow: -6px 8px 18px -8px rgba(0, 0, 0, 0.42);
 }
+:root[data-vision="contrast"] .verdict { background: var(--beschlag), var(--surface); }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
   .day, .plan-item, .air-slot, .place-item { --bsl-l: color-mix(in srgb, var(--accent) 45%, transparent); }
 }
@@ -1434,6 +1435,6 @@ select {
 /* Hoher Kontrast kennt keine Schatten, der Beschlag bleibt. Gedruckt wird ohne beides. */
 :root[data-vision="contrast"] :is(button, .card, .choice, .verdict, .day, .plan-item, .air-slot, .place-item, .advanced) { box-shadow: none; }
 @media print {
-  button, input[type="text"], input[type="number"], select, .card, .choice, .notice, .verdict, .day, .plan-item, .air-slot, .place-item, .advanced { background-image: none !important; box-shadow: none !important; }
+  :root:root:root :is(button, input[type="text"], input[type="number"], select, .card, .choice, .notice, .verdict, .day, .plan-item, .air-slot, .place-item, .advanced) { background-image: none; box-shadow: none; }
 }
 /* Ende Beschlag */

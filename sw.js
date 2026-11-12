@@ -8,7 +8,7 @@
 
 // Bürg war heizwarte-v1; der M1-Deploy geht schon mit heizwarte-v2 raus (BAUPLAN Abschnitt 9). Ab M2 bei
 // jedem Deploy um 1 erhöhen (M2 → v3), zusammen mit den ?v=-Stempeln in index.html.
-const CACHE = 'heizwarte-v12';
+const CACHE = 'heizwarte-v13';
 
 // Genau die Dateien, die index.html, das Manifest und css/style.css laden, mit denselben ?v=-Stempeln
 // wie in index.html. Nichts darüber hinaus: eine Datei, die es nicht gibt, ließe addAll und damit
@@ -17,15 +17,15 @@ const SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=2026-11-12c',
-  './js/boot.js?v=2026-11-03',
-  './js/storage.js?v=2026-11-03',
-  './js/i18n.js?v=2026-11-03',
-  './js/geo.js?v=2026-11-03',
-  './js/weather.js?v=2026-11-03',
-  './js/heat.js?v=2026-11-03',
-  './js/chart.js?v=2026-11-03',
-  './js/app.js?v=2026-11-03',
+  './css/style.css?v=2026-11-12d',
+  './js/boot.js?v=2026-11-12d',
+  './js/storage.js?v=2026-11-12d',
+  './js/i18n.js?v=2026-11-12d',
+  './js/geo.js?v=2026-11-12d',
+  './js/weather.js?v=2026-11-12d',
+  './js/heat.js?v=2026-11-12d',
+  './js/chart.js?v=2026-11-12d',
+  './js/app.js?v=2026-11-12d',
   './assets/schraube-1.svg',
   './assets/schraube-2.svg',
   './assets/schraube-3.svg',
