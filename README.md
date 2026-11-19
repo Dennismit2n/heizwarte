@@ -15,11 +15,11 @@ The traffic light looks at the next two nights and has four levels: “Calm”, 
 - Five heating types to choose from: radiators, underfloor heating in screed, underfloor heating dry or thin, heat pump with underfloor heating, and storage heaters. For storage heaters, Heizwarte tells you for each evening how high to charge them.
 - A heating schedule for the coming nights with the low, when it starts to cool down and when to start.
 - The weather now, plus today and the next two days with low and high, rain, sun and gusts.
-- Behind “Show more”, the temperature over 72 hours and the best time to air out against mould. If there is a weather station nearby, the chart also shows a second opinion (MOSMIX).
+- Behind “Show more”, the temperature over 72 hours and the best time to air out against mold. If there is a weather station nearby, the chart also shows a second opinion (MOSMIX).
 - Warnings from Deutscher Wetterdienst (the German weather service) for places in Germany, word for word.
 - Up to five places you can switch between.
 - Room temperature, heat-up time and elevation are in the settings. Under “For advanced users” you can also change the thresholds at which the traffic light switches.
-- Appearance of your choice: System, Light, Dark, High contrast light and dark, Colour-blind light and dark, and Inverted colours.
+- Appearance of your choice: System, Light, Dark, High contrast light and dark, Color-blind light and dark, and Inverted colors.
 - The “Install” button sets Heizwarte up as an app if your browser can do that. After the first visit it also starts without a connection and shows the last update.
 
 ## Languages
@@ -40,7 +40,7 @@ Your address, or your location rounded to about 100 m, goes to the place search 
 
 - Weather data: Open-Meteo.com (CC BY 4.0), in Germany, Austria and Switzerland the DWD ICON model
 - Warnings and second opinion (MOSMIX): Deutscher Wetterdienst, via Bright Sky
-- Elevation: Copernicus DEM GLO-90 from the Copernicus programme (ESA), via Open-Meteo
+- Elevation: Copernicus DEM GLO-90 from the Copernicus program (ESA), via Open-Meteo
 - Place search: Photon (komoot), data © OpenStreetMap contributors (ODbL)
 - Heating degree days according to VDI 3807
 - Font: Atkinson Hyperlegible (SIL Open Font License)
@@ -63,8 +63,8 @@ The unit tests only need Node. For the smoke tests in the browser, run `npm inst
 
 On every deploy, bump the `CACHE` constant in [sw.js](sw.js) by one and renew the `?v=` stamps in `index.html`.
 
-## Licence
+## License
 
-[MIT](LICENSE). The font is under the SIL Open Font License ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)), the data falls under the licences of the sources above.
+[MIT](LICENSE). The font is under the SIL Open Font License ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)), the data falls under the licenses of the sources above.
 
 © 2026 Dennis_mit_2n · part of [the workshop](https://dennismit2n.github.io/)
